@@ -1,0 +1,35 @@
+report:
+  title: "매입/매출 재고 분석 보고서"
+  scope: "요약, 금액 대사, 주간 그래프, 원청별 마진, 매출 TOP"
+
+plotly:
+  include_plotlyjs: inline
+
+charts:
+  weekly_purchase_sales:
+    title: "주간 매입/매출 금액"
+    x_axis_title: "주간"
+    y_axis_title: "금액"
+    unit_label: "원"
+    height: 380
+    series:
+      purchase_amount:
+        label: "매입금액"
+        color: "#2f6f7e"
+      sales_amount:
+        label: "매출금액"
+        color: "#c47a23"
+
+  principal_margin:
+    title: "원청별 매출/원가/마진"
+    x_axis_title: "금액"
+    y_axis_title: "원청"
+    unit_label: "원"
+    height: 430
+    series:
+      sales_amount:
+        label: "매출금액"
+        color: "#2f6f7e"
+      cost_amount:
+        label: "매출원가"
+        color: "#7b8794"
