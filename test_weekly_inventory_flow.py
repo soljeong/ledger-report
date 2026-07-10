@@ -36,7 +36,8 @@ class WeeklyInventoryFlowTests(unittest.TestCase):
         self.assertEqual(rows[0]["outbound_cost_estimate"], 1740)
         self.assertEqual(rows[0]["estimated_inventory_amount"], 1780)
         self.assertEqual(rows[-1]["week_start"], "2026-05-18")
-        self.assertEqual(rows[-1]["estimated_inventory_amount"], -570)
+        self.assertEqual(rows[-1]["estimated_inventory_amount"], 1510)
+        self.assertEqual(rows[-1]["estimated_inventory_amount"], sources["reconciliation"]["summary"]["ending_fifo_inventory_amount"])
 
     def test_chart_uses_signed_bars_and_secondary_axis(self) -> None:
         spec = load_report_spec(BASE_DIR / "report_spec.yaml")["charts"]["weekly_inventory_flow"]

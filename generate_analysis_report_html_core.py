@@ -154,17 +154,22 @@ def weekly_purchase_sales_amounts(
     quantity_by_day: dict[date, int | float] = defaultdict(int)
     row_count_by_day: dict[date, int] = defaultdict(int)
     date_values: list[date] = []
-    fifo_cost_by_sale: dict[str, float] = {}
-    if reconciliation:
-        fifo_cost_by_sale = {
-            row["sale_id"]: float(row.get("fifo_cost_amount") or 0)
-            for row in reconciliation.get("sales_allocations", [])
-            if row.get("in_analysis_period")
-        }
+    metadata = (reconciliation or {}).get("metadata", {})
+    period_start, period_end = metadata.get("period_start"), metadata.get("period_end")
+    def in_period(row: dict[str, Any]) -> bool:
+        return not period_start or not period_end or period_start <= row.get("date", "") <= period_end
+    fifo_cost_by_sale = {
+        row["transaction_id"]: float(row.get("cost_amount") or 0)
+        for row in (reconciliation or {}).get("sales_cost_events", [])
+        if in_period(row)
+    }
 
     for row in purchase_records:
-        date_values.append(date.fromisoformat(row["date"]))
+        if in_period(row):
+            date_values.append(date.fromisoformat(row["date"]))
     for row in sales_records:
+        if not in_period(row):
+            continue
         row_date = date.fromisoformat(row["date"])
         sales_by_day[row_date] += row.get("total_amount") or 0
         sale_id = f"{row.get('date')}|{row.get('voucher')}|{row.get('excel_row')}"
@@ -426,10 +431,15 @@ def principal_sales_cost_rows(
 ) -> list[dict[str, Any]]:
     principal_by_voucher = voucher_principal_map(voucher_metadata)
     fifo_by_sale = {
-        row["sale_id"]: row
-        for row in (reconciliation or {}).get("sales_allocations", [])
-        if row.get("in_analysis_period")
+        row["transaction_id"]: row
+        for row in (reconciliation or {}).get("sales_cost_events", [])
     }
+    if not fifo_by_sale:
+        fifo_by_sale = {
+            row["sale_id"]: {"cost_amount": row.get("fifo_cost_amount", 0), "unconfirmed_quantity": row.get("unconfirmed_quantity", 0), "event_type": "sale"}
+            for row in (reconciliation or {}).get("sales_allocations", [])
+            if row.get("in_analysis_period")
+        }
     grouped: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
             "principal": None,
@@ -459,8 +469,8 @@ def principal_sales_cost_rows(
         if sale is None:
             group["missing_cost_row_count"] += 1
             continue
-        group["cost_amount"] += sale.get("fifo_cost_amount") or 0
-        if sale.get("unconfirmed_quantity"):
+        group["cost_amount"] += sale.get("cost_amount") or 0
+        if sale.get("event_type") == "sale" and sale.get("unconfirmed_quantity"):
             group["unconfirmed_quantity"] += sale["unconfirmed_quantity"]
             group["unconfirmed_row_count"] += 1
 
@@ -899,7 +909,8 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
       font-size: 15px;
     }}
     .table-scroll {{
-      overflow: visible;
+      max-width: 100%;
+      overflow-x: auto;
     }}
     .legend {{
       display: flex;

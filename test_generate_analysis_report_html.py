@@ -11,6 +11,8 @@ from generate_analysis_report_html import (
     principal_sales_cost_rows,
     render_report_html,
 )
+from generate_analysis_report_html_core import weekly_purchase_sales_amounts
+from analyze_inventory import build_reconciliation
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -63,6 +65,35 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         )
         self.assertEqual(sum(row["cost_amount"] for row in rows), fifo_total)
         self.assertGreater(fifo_total, 0)
+
+    def test_report_renders_missing_backfill_date_as_none(self):
+        sources = load_sources(EXAMPLE_DIR)
+        sources["reconciliation"]["metadata"]["backfill_last_purchase_date"] = None
+
+        html = render_report_html(sources)
+
+        self.assertIn("후속 원가보충 최종 매입일", html)
+        self.assertIn(">없음</strong>", html)
+
+    def test_period_charts_exclude_outside_sales_and_problem_table_identifies_rows(self):
+        purchases = {"records": [{"date": "2026-01-01", "quantity": 10, "unit_price": 100, "total_amount": 1000, "product_id": 1, "voucher": 1, "excel_row": 1, "item_name": "Item", "specification": "A"}]}
+        sales = {"records": [
+            {"date": "2026-01-10", "quantity": 2, "total_amount": 400, "product_id": 1, "voucher": 1, "excel_row": 1, "item_name": "Item", "specification": "A"},
+            {"date": "2026-02-10", "quantity": 3, "total_amount": 600, "product_id": 1, "voucher": 2, "excel_row": 2, "item_name": "Item", "specification": "A"},
+        ]}
+        reconciliation = build_reconciliation(purchases, sales, {"records": []}, "2026-01-01", "2026-01-31", "2026-02-28")
+        weekly = weekly_purchase_sales_amounts(purchases["records"], sales["records"], [], reconciliation)
+        self.assertEqual(sum(row["sales_amount"] for row in weekly), 400)
+        self.assertEqual(sum(row["quantity"] for row in weekly), 2)
+        sources = load_sources(EXAMPLE_DIR)
+        self.assertIn("문제 품목 상세", render_report_html(sources))
+
+    def test_fifo_amount_balance_identity_is_exposed_without_error(self):
+        purchases = {"records": [{"date": "2025-12-30", "quantity": 10, "unit_price": 100, "total_amount": 1000, "product_id": 1, "voucher": 1, "excel_row": 1, "item_name": "Item", "specification": "A"}]}
+        sales = {"records": [{"date": "2026-01-10", "quantity": 4, "total_amount": 800, "product_id": 1, "voucher": 1, "excel_row": 1, "item_name": "Item", "specification": "A"}]}
+        reconciliation = build_reconciliation(purchases, sales, {"records": [{"product_id": 1, "stock_quantity": 6}]}, "2026-01-01", "2026-01-31", "2026-01-31")
+        summary = reconciliation["summary"]
+        self.assertEqual(summary["sales_amount"] + summary["ending_fifo_inventory_amount"], summary["opening_stock_amount"] + summary["period_purchase_cost_amount"] + summary["backfilled_amount"] + summary["gross_profit"])
 
     def test_report_spec_controls_chart_text_and_plotlyjs_mode(self):
         spec = load_report_spec(BASE_DIR / "report_spec.yaml")

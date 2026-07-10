@@ -81,6 +81,23 @@ class InventoryAnalysisTests(unittest.TestCase):
         self.assertEqual(later["summary"]["ending_fifo_inventory_amount"], 600)
         self.assertEqual(later["rows"][0]["ending_signed_stock_quantity"], 6)
 
+    def test_post_end_negative_purchase_cannot_change_end_snapshot(self):
+        result = analyze(
+            [purchase("2026-01-01", 10, 100), purchase("2026-01-02", -5, 100, voucher=2, excel_row=2)],
+            [], [inventory(5)], end="2026-01-01", stock_date="2026-01-02",
+        )
+        row = result["rows"][0]
+        self.assertEqual((row["ending_normal_stock_quantity"], row["ending_fifo_inventory_amount"]), (10, 1000))
+        self.assertEqual(result["errors"][0]["code"], "purchase_cancellation_exceeds_remaining")
+
+    def test_post_end_negative_purchase_can_cancel_only_post_end_remainder(self):
+        result = analyze(
+            [purchase("2026-01-01", 10, 100), purchase("2026-01-02", 7, 200, voucher=2, excel_row=2), purchase("2026-01-03", -5, 200, voucher=3, excel_row=3)],
+            [], [inventory(12)], end="2026-01-01", stock_date="2026-01-03",
+        )
+        self.assertEqual(result["rows"][0]["ending_fifo_inventory_amount"], 1000)
+        self.assertEqual(result["errors"], [])
+
     def test_followup_purchases_backfill_old_shortage_in_fifo_order(self):
         result = analyze(
             [purchase("2026-01-03", 6, 100), purchase("2026-01-04", 10, 120, voucher=2, excel_row=2)],
@@ -119,6 +136,7 @@ class InventoryAnalysisTests(unittest.TestCase):
         )
         self.assertEqual(result["rows"][0]["ending_normal_stock_quantity"], 3)
         self.assertEqual(result["rows"][0]["ending_fifo_inventory_amount"], 300)
+        self.assertEqual(result["summary"]["period_purchase_cost_amount"], 300)
 
     def test_negative_purchase_overage_is_error(self):
         result = analyze([purchase("2026-01-01", 2, 100), purchase("2026-01-02", -3, 100, voucher=2, excel_row=2)], [], [inventory(2)])
@@ -135,6 +153,43 @@ class InventoryAnalysisTests(unittest.TestCase):
         self.assertEqual(result["summary"]["period_sales_quantity"], 2)
         self.assertEqual(result["summary"]["fifo_sales_cost_amount"], 200)
         self.assertEqual(result["rows"][0]["ending_fifo_inventory_amount"], 800)
+
+    def test_backfilled_sale_cancellation_restores_layer_and_reuses_it(self):
+        result = analyze(
+            [purchase("2026-01-02", 10, 100)],
+            [sale("2026-01-01", 10), sale("2026-01-03", -5, voucher=2, excel_row=2), sale("2026-01-04", 5, voucher=3, excel_row=3)],
+            [inventory(0)], end="2026-01-04", stock_date="2026-01-04",
+        )
+        self.assertEqual(result["summary"]["ending_normal_stock_quantity"], 0)
+        self.assertEqual(result["summary"]["fifo_sales_cost_amount"], 1000)
+        self.assertEqual([event["cost_amount"] for event in result["sales_cost_events"]], [1000, -500, 500])
+
+    def test_pre_period_sale_cancellation_is_current_period_negative_cogs(self):
+        result = analyze(
+            [purchase("2025-12-19", 4, 100)],
+            [sale("2025-12-20", 4), sale("2026-01-10", -2, voucher=2, excel_row=2)],
+            [inventory(2)], start="2026-01-01", end="2026-01-31", stock_date="2026-01-31",
+        )
+        row = result["rows"][0]
+        self.assertEqual((row["period_sales_quantity"], row["fifo_sales_cost_amount"]), (-2, -200))
+        self.assertEqual(row["ending_fifo_inventory_amount"], 200)
+
+    def test_unconfirmed_sale_cancellation_has_no_cost_event(self):
+        result = analyze([], [sale("2026-01-01", 10), sale("2026-01-02", -4, voucher=2, excel_row=2)], [inventory(-6)])
+        self.assertEqual(result["summary"]["unconfirmed_quantity"], 6)
+        self.assertEqual(result["summary"]["fifo_sales_cost_amount"], 0)
+        self.assertEqual(result["sales_cost_events"][1]["cost_amount"], 0)
+
+    def test_amount_identity_holds_for_non_error_product(self):
+        result = analyze(
+            [purchase("2025-12-01", 10, 100), purchase("2026-01-02", 5, 200)],
+            [sale("2026-01-03", 8)], [inventory(7)], start="2026-01-01", end="2026-01-31", stock_date="2026-01-31",
+        )
+        row = result["rows"][0]
+        self.assertEqual(
+            row["opening_stock_amount"] + row["period_purchase_cost_amount"] + row["backfilled_amount"],
+            row["fifo_sales_cost_amount"] + row["ending_fifo_inventory_amount"],
+        )
 
     def test_negative_sale_overage_is_error(self):
         result = analyze([purchase("2026-01-01", 2, 100)], [sale("2026-01-02", -3)], [inventory(2)])
