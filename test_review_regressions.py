@@ -28,7 +28,7 @@ class ReviewRegressionTests(unittest.TestCase):
     def test_normal_placeholder_is_replaced_with_chart(self):
         sources = deepcopy(load_sources(BASE))
         summary = sources["reconciliation"]["summary"]
-        summary.update(gross_profit_status="confirmed", opening_stock_amount=0, period_purchase_cost_amount=100, period_sales_supply_amount=200, sales_amount=200, inventory_amount_at_fifo=0, ending_fifo_inventory_amount=0, post_period_backfill_amount=0, prior_period_shortage_settlement_amount=0, gross_profit=100)
+        summary.update(gross_profit_status="confirmed", opening_stock_amount=0, opening_stock_amount_exact="0", period_purchase_cost_amount=100, period_purchase_cost_amount_exact="100", period_sales_supply_amount=200, period_sales_supply_amount_exact="200", sales_amount=200, inventory_amount_at_fifo=0, ending_fifo_inventory_amount=0, ending_fifo_inventory_amount_exact="0", post_period_backfill_amount=0, period_backfilled_amount_exact="0", prior_period_shortage_settlement_amount=0, prior_period_shortage_settlement_amount_exact="0", gross_profit=100, gross_profit_exact="100")
         self.assertIn('id="amount-balance-chart"', render_report_html(sources))
 
     def test_post_period_backfill_confirms_original_sale_week(self):

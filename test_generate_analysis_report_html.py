@@ -47,7 +47,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertIn("1,510", html)
         amount_section = html.split('id="amount-title"', 1)[1].split('</section>', 1)[0]
         self.assertIn("잠정 매출총이익", amount_section)
-        self.assertIn("4,000", amount_section)
+        self.assertIn("4,500", amount_section)
         self.assertNotIn("평균원가", html)
         self.assertNotIn("최종매입가", html)
         self.assertNotIn("purchase_unit_costs", html)
@@ -136,6 +136,35 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertIn('id="vat-settlement-title"', html[vat_start:vat_end])
         self.assertNotIn("부가세 납부 예상액", html[vat_start:vat_end])
 
+    def test_demo_amounts_preserve_component_mismatch_and_fifo_unconfirmed_state(self):
+        sources = load_sources(EXAMPLE_DIR)
+        summary = sources["reconciliation"]["summary"]
+        self.assertEqual(
+            (
+                summary["period_sales_supply_amount"],
+                summary["period_sales_vat_amount"],
+                summary["period_sales_total_amount"],
+                summary["fifo_sales_cost_amount"],
+                summary["gross_profit"],
+                summary["vat_settlement_amount"],
+                summary["post_vat_reference_amount"],
+            ),
+            (9460, 160, 9630, 4960, 4500, 106, 4394),
+        )
+        product_1007 = next(row for row in sources["reconciliation"]["rows"] if row["product_id"] == 1007)
+        self.assertEqual((product_1007["cost_status"], product_1007["amount_validation_status"], product_1007["period_unconfirmed_quantity"], product_1007["unconfirmed_sales_supply_amount"]), ("unconfirmed", "component_mismatch", 5, 500))
+        weekly = weekly_purchase_sales_amounts(sources["purchase"]["records"], sources["sales"]["records"], [], sources["reconciliation"])
+        principal = principal_sales_cost_rows(sources["sales"]["records"], sources["purchase"]["records"], sources["sales_voucher_metadata"], sources["reconciliation"])
+        self.assertEqual(sum(row["sales_amount"] for row in weekly), 9460)
+        self.assertEqual(sum(row["sales_amount"] for row in principal), 9460)
+        self.assertEqual(sum(row["cost_amount"] for row in weekly), 4960)
+        self.assertEqual(sum(row["cost_amount"] for row in principal), 4960)
+        html = render_report_html(sources)
+        self.assertIn("금액 구성 검증 상태", html)
+        self.assertIn("component_mismatch", html)
+        self.assertIn("매출 부가세</th><td class=\"money\">160", html)
+        self.assertIn("잠정 부가세 정산금</th><td class=\"money\">106", html)
+
     def test_weekly_and_principal_margin_statuses_hide_non_final_rates(self):
         purchase_rows = [
             {"date": "2026-01-01", "quantity": 1, "unit_price": 100, "supply_amount": 100, "vat": 0, "total_amount": 100, "product_id": 1, "voucher": 1, "excel_row": 1},
@@ -145,16 +174,18 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         ]
         reconciliation = build_reconciliation({"records": purchase_rows}, {"records": sales_rows}, {"records": []}, "2026-01-01", "2026-01-31", "2026-01-31")
         weekly = weekly_purchase_sales_amounts(purchase_rows, sales_rows, [], reconciliation)
-        self.assertEqual(weekly[0]["margin_status"], "error")
-        self.assertIsNone(weekly[0]["margin_rate"])
+        self.assertEqual(weekly[0]["margin_status"], "confirmed")
+        self.assertEqual(weekly[0]["amount_validation_status"], "component_mismatch")
+        self.assertEqual(weekly[0]["margin_rate"], 0)
         principal = principal_sales_cost_rows(sales_rows, purchase_rows, {"records": [{"voucher_key": "2026-01-02-2", "principal": "P"}]}, reconciliation)
-        self.assertEqual(principal[0]["margin_status"], "error")
-        self.assertIsNone(principal[0]["margin_rate"])
+        self.assertEqual(principal[0]["margin_status"], "confirmed")
+        self.assertEqual(principal[0]["amount_validation_status"], "component_mismatch")
+        self.assertEqual(principal[0]["margin_rate"], 0)
 
     def test_negative_amounts_replace_the_fixed_balance_placeholder(self):
         sources = deepcopy(load_sources(EXAMPLE_DIR))
         summary = sources["reconciliation"]["summary"]
-        summary.update(gross_profit_status="confirmed", opening_stock_amount=0, period_purchase_cost_amount=-10, period_sales_supply_amount=10, sales_amount=10, inventory_amount_at_fifo=0, ending_fifo_inventory_amount=0, post_period_backfill_amount=0, prior_period_shortage_settlement_amount=0, gross_profit=0)
+        summary.update(gross_profit_status="confirmed", opening_stock_amount=0, opening_stock_amount_exact="0", period_purchase_cost_amount=-10, period_purchase_cost_amount_exact="-10", period_sales_supply_amount=10, period_sales_supply_amount_exact="10", sales_amount=10, inventory_amount_at_fifo=0, ending_fifo_inventory_amount=0, ending_fifo_inventory_amount_exact="0", post_period_backfill_amount=0, period_backfilled_amount_exact="0", prior_period_shortage_settlement_amount=0, prior_period_shortage_settlement_amount_exact="0", gross_profit=0, gross_profit_exact="0")
         html = render_report_html(sources)
         self.assertIn("금액 밸런스 차트는 확정값으로 표시하지 않는다", html)
         self.assertNotIn("AMOUNT_BALANCE_CHART", html)

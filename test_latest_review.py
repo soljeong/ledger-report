@@ -4,6 +4,7 @@ from decimal import Decimal
 import unittest
 
 from analyze_inventory import build_reconciliation
+from generate_analysis_report_html import render_amount_balance_chart
 from generate_analysis_report_html_core import principal_sales_cost_rows, weekly_purchase_sales_amounts
 
 
@@ -96,8 +97,31 @@ class LatestReviewTests(unittest.TestCase):
     def test_group_exact_margin_is_present(self):
         r, b, s, _ = self.exact_fixture(); self.assertEqual(weekly_purchase_sales_amounts(b, s, [], r)[0]["margin_amount_exact"], "0.51")
 
-    def test_group_rounding_difference_is_present(self):
-        r, b, s, _ = self.exact_fixture(); self.assertEqual(weekly_purchase_sales_amounts(b, s, [], r)[0]["rounding_difference"], "0.49")
+    def test_group_cost_rounding_difference_is_present(self):
+        r, b, s, _ = self.exact_fixture(); self.assertEqual(weekly_purchase_sales_amounts(b, s, [], r)[0]["cost_rounding_difference"], "0.49")
+
+    def test_weekly_and_principal_margin_rates_use_exact_decimals(self):
+        buys = [purchase("2026-01-01", 1, "0.49")]
+        sells = [sale("2026-01-02", amount=1)]
+        result = reconcile(buys, sells)
+        weekly = weekly_purchase_sales_amounts(buys, sells, [], result)
+        metadata = {"records": [{"voucher_key": "2026-01-02-1", "principal": "A"}]}
+        principal = principal_sales_cost_rows(sells, buys, metadata, result)
+        self.assertEqual(weekly[0]["margin_rate"], 51)
+        self.assertEqual(principal[0]["margin_rate"], 51)
+
+    def test_group_rounding_fields_are_component_specific(self):
+        result, buys, sells, metadata = self.exact_fixture()
+        weekly = weekly_purchase_sales_amounts(buys, sells, [], result)[0]
+        principal = principal_sales_cost_rows(sells, buys, metadata, result)[0]
+        for row in (weekly, principal):
+            self.assertEqual(set(("sales_rounding_difference", "cost_rounding_difference", "margin_rounding_difference")) - set(row), set())
+
+    def test_amount_balance_chart_uses_exact_components(self):
+        html = render_amount_balance_chart("0.49", "0", "1", "0", "0", "0", "0.51")
+        self.assertIn('id="amount-balance-chart"', html)
+        mismatch = render_amount_balance_chart("0.48", "0", "1", "0", "0", "0", "0.51")
+        self.assertIn("금액 밸런스 불일치", mismatch)
 
     def test_unassigned_post_purchase_error_is_global_not_principal_error(self):
         bad = purchase("2026-02-01"); bad["product_id"] = None; bad["unit_price"] = None

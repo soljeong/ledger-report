@@ -306,7 +306,7 @@ class ProductEngine:
             self.cancel_sale(row)
 
     def _error(self, code: str, row: dict[str, Any], **details: Any) -> None:
-        self.errors.append({"code": code, "source": "purchase" if "purchase" in code else "sales", "product_id": self.product_id, "date": row.get("date"), "voucher": row.get("voucher"), "excel_row": row.get("excel_row"), "affects_quantity": True, "affects_fifo_cost": True, "affects_revenue": True, "affects_vat": True, "affects_inventory_reconciliation": True, **details})
+        self.errors.append({"code": code, "source": "purchase" if "purchase" in code else "sales", "product_id": self.product_id, "date": row.get("date"), "voucher": row.get("voucher"), "excel_row": row.get("excel_row"), "affects_quantity": True, "affects_fifo_cost": True, "affects_revenue": False, "affects_vat": False, "affects_inventory_reconciliation": True, **details})
 
 
 def _clean(value: dict[str, Any]) -> dict[str, Any]:
@@ -351,27 +351,107 @@ def _record_error(source: str, row: dict[str, Any], code: str, **details: Any) -
     return {"code": code, "source": source, "product_id": row.get("product_id"), "date": row.get("date"), "voucher": row.get("voucher"), "excel_row": row.get("excel_row"), **scopes, **details}
 
 
-def _amount_validation_error(source: str, row: dict[str, Any]) -> dict[str, Any] | None:
+def transaction_key(source: str, row: dict[str, Any]) -> tuple[str, Any, Any, Any, Any]:
+    """Identify a source row without using product_id as an amount prerequisite."""
+    return (source, row.get("date"), row.get("voucher"), row.get("excel_row"), row.get("product_id"))
+
+
+def _amount_validation_state(source: str, row: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Validate each monetary component independently.
+
+    A component's numeric usability is deliberately separate from the
+    three-component arithmetic check.  This lets a usable supply amount or
+    VAT survive an unrelated FIFO or total-amount problem.
+    """
     fields = ("supply_amount", "vat", "total_amount")
-    missing = [field for field in fields if row.get(field) in (None, "")]
+    values: dict[str, Decimal] = {}
+    missing, invalid = [], []
+    for field in fields:
+        raw = row.get(field)
+        if raw in (None, ""):
+            missing.append(field)
+            continue
+        try:
+            values[field] = dec(raw)
+        except ValueError:
+            invalid.append(field)
+
+    valid = {field: field in values for field in fields}
+    components_match: bool | None = None
+    if not missing and not invalid:
+        components_match = values["supply_amount"] + values["vat"] == values["total_amount"]
+    status = (
+        "invalid_component" if invalid else
+        "missing_component" if missing else
+        "component_mismatch" if components_match is False else
+        "valid"
+    )
+    state = {
+        "source": source,
+        "date": row.get("date"),
+        "voucher": row.get("voucher"),
+        "excel_row": row.get("excel_row"),
+        "product_id": row.get("product_id"),
+        "supply_amount_valid": valid["supply_amount"],
+        "vat_valid": valid["vat"],
+        "total_amount_valid": valid["total_amount"],
+        "amount_components_match": components_match,
+        "amount_validation_status": status,
+        "fifo_eligible": False,
+    }
+    if status == "valid":
+        return state, None
+
+    error_code = {
+        "missing_component": "amount_components_missing",
+        "invalid_component": "amount_components_invalid",
+        "component_mismatch": "amount_components_mismatch",
+    }[status]
+    details: dict[str, Any] = {
+        "amount_validation_status": status,
+        "supply_amount_valid": valid["supply_amount"],
+        "vat_valid": valid["vat"],
+        "total_amount_valid": valid["total_amount"],
+        "amount_components_match": components_match,
+        "supply_amount": row.get("supply_amount"),
+        "vat": row.get("vat"),
+        "total_amount": row.get("total_amount"),
+    }
     if missing:
-        return _record_error(
-            source, row, "amount_components_missing", missing_fields=missing,
-            affects={"affects_quantity": False, "affects_fifo_cost": False, "affects_revenue": source == "sales", "affects_vat": True, "affects_inventory_reconciliation": False},
-            supply_amount=row.get("supply_amount"), vat=row.get("vat"), total_amount=row.get("total_amount"),
+        details["missing_fields"] = missing
+    if invalid:
+        details["invalid_fields"] = invalid
+    if components_match is False:
+        calculated = values["supply_amount"] + values["vat"]
+        details.update(
+            calculated_amount=out_number(calculated),
+            difference=out_number(calculated - values["total_amount"]),
         )
-    try:
-        supply_amount, vat, total_amount = (dec(row[field]) for field in fields)
-    except ValueError as exc:
-        return _record_error(source, row, "amount_components_invalid", reason=str(exc), affects={"affects_quantity": False, "affects_fifo_cost": False, "affects_revenue": source == "sales", "affects_vat": True, "affects_inventory_reconciliation": False}, **{field: row.get(field) for field in fields})
-    calculated = supply_amount + vat
-    if calculated != total_amount:
-        return _record_error(
-            source, row, "amount_components_mismatch", supply_amount=out_number(supply_amount), vat=out_number(vat),
-            total_amount=out_number(total_amount), calculated_amount=out_number(calculated), difference=out_number(calculated - total_amount),
-            affects={"affects_quantity": False, "affects_fifo_cost": False, "affects_revenue": source == "sales", "affects_vat": True, "affects_inventory_reconciliation": False},
-        )
-    return None
+    error = _record_error(
+        source,
+        row,
+        error_code,
+        # Only unusable supply makes revenue unusable.  VAT validation remains
+        # deliberately conservative because its settlement needs all amount
+        # components to be auditable.
+        affects={
+            "affects_quantity": False,
+            "affects_fifo_cost": False,
+            "affects_revenue": source == "sales" and not valid["supply_amount"],
+            "affects_vat": True,
+            "affects_inventory_reconciliation": False,
+        },
+        **details,
+    )
+    return state, error
+
+
+def _worst_amount_status(states: Iterable[dict[str, Any]]) -> str:
+    values = {state.get("amount_validation_status", "valid") for state in states}
+    for status in ("invalid_component", "missing_component", "component_mismatch"):
+        if status in values:
+            return status
+    return "valid"
 
 
 def _sum_rows(rows: Iterable[dict[str, Any]], field: str) -> Decimal:
@@ -385,26 +465,68 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
     purchases, sales, inventory = list(purchase_records), list(sales_records), list(inventory_records)
     errors: list[dict[str, Any]] = []
     amount_validation_errors: list[dict[str, Any]] = []
-    valid_amount_keys: set[tuple[str, Any, Any, Any]] = set()
+    transaction_validations: list[dict[str, Any]] = []
+    valid_supply_keys: set[tuple[str, Any, Any, Any, Any]] = set()
+    valid_vat_keys: set[tuple[str, Any, Any, Any, Any]] = set()
+    valid_total_keys: set[tuple[str, Any, Any, Any, Any]] = set()
+    fifo_eligible_keys: set[tuple[str, Any, Any, Any, Any]] = set()
+    amount_records: list[tuple[dict[str, Any], str]] = []
     events, product_ids, ledger_ids = [], set(), set()
     names: dict[Any, set[str]] = defaultdict(set); specs: dict[Any, set[str]] = defaultdict(set)
     for row, kind in [(r, "purchase") for r in purchases] + [(r, "sales") for r in sales]:
-        try:
-            iso_date(row.get("date")); dec(row.get("quantity"))
-            if row.get("quantity") is None or (kind == "purchase" and row.get("unit_price") is None): raise ValueError("required field is missing")
-        except ValueError as exc:
-            errors.append(_record_error(kind, row, "invalid_record", reason=str(exc))); continue
-        product_id = row.get("product_id")
-        if product_id in (None, ""):
-            errors.append(_record_error(kind, row, "missing_product_id", reason="record excluded from FIFO and quantity calculations")); continue
-        amount_error = _amount_validation_error(kind, row)
+        amount_state, amount_error = _amount_validation_state(kind, row)
+        key = transaction_key(kind, row)
+        if amount_state["supply_amount_valid"]:
+            valid_supply_keys.add(key)
+        if amount_state["vat_valid"]:
+            valid_vat_keys.add(key)
+        if amount_state["total_amount_valid"]:
+            valid_total_keys.add(key)
         if amount_error:
             amount_validation_errors.append(amount_error)
-        else:
-            valid_amount_keys.add((kind, row.get("date"), row.get("voucher"), row.get("excel_row")))
-        product_ids.add(product_id); ledger_ids.add(product_id); events.append((row, kind))
+
+        try:
+            iso_date(row.get("date"))
+        except ValueError as exc:
+            errors.append(_record_error(
+                kind, row, "invalid_record", reason=str(exc),
+                affects={"affects_quantity": True, "affects_fifo_cost": True, "affects_revenue": False, "affects_vat": True, "affects_inventory_reconciliation": True},
+            ))
+            transaction_validations.append(amount_state)
+            continue
+        # A date-valid transaction is available to the amount stream even if
+        # it is unusable for FIFO (for example, it has no product_id).
+        amount_records.append((row, kind))
+        product_id = row.get("product_id")
+        if product_id in (None, ""):
+            errors.append(_record_error(
+                kind, row, "missing_product_id", reason="record excluded from FIFO and quantity calculations",
+                affects={"affects_quantity": True, "affects_fifo_cost": True, "affects_revenue": False, "affects_vat": False, "affects_inventory_reconciliation": True},
+            ))
+            transaction_validations.append(amount_state)
+            continue
+        product_ids.add(product_id); ledger_ids.add(product_id)
         if row.get("item_name"): names[product_id].add(str(row["item_name"]))
         if row.get("specification"): specs[product_id].add(str(row["specification"]))
+        try:
+            if row.get("quantity") in (None, ""):
+                raise ValueError("quantity is required")
+            dec(row.get("quantity"))
+            if kind == "purchase":
+                if row.get("unit_price") in (None, ""):
+                    raise ValueError("unit_price is required")
+                dec(row.get("unit_price"))
+        except ValueError as exc:
+            errors.append(_record_error(
+                kind, row, "invalid_record", reason=str(exc),
+                affects={"affects_quantity": True, "affects_fifo_cost": True, "affects_revenue": False, "affects_vat": False, "affects_inventory_reconciliation": True},
+            ))
+            transaction_validations.append(amount_state)
+            continue
+        amount_state["fifo_eligible"] = True
+        fifo_eligible_keys.add(key)
+        transaction_validations.append(amount_state)
+        events.append((row, kind))
     for row in inventory:
         product_id = row.get("product_id")
         if product_id in (None, ""):
@@ -413,11 +535,18 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
         if row.get("item_name"): names[product_id].add(str(row["item_name"]))
         if row.get("specification"): specs[product_id].add(str(row["specification"]))
     events.sort(key=lambda pair: event_sort_key(*pair))
-    def has_valid_amount(row: dict[str, Any], kind: str) -> bool:
-        return (kind, row.get("date"), row.get("voucher"), row.get("excel_row")) in valid_amount_keys
+    def has_valid_component(row: dict[str, Any], kind: str, component: str) -> bool:
+        keys = {
+            "supply_amount": valid_supply_keys,
+            "vat": valid_vat_keys,
+            "total_amount": valid_total_keys,
+        }
+        return transaction_key(kind, row) in keys[component]
     engines = {product_id: ProductEngine(product_id) for product_id in product_ids}
     pre = [(r, k) for r, k in events if iso_date(r["date"]) < start]
     period = [(r, k) for r, k in events if start <= iso_date(r["date"]) <= end]
+    amount_period = [(r, k) for r, k in amount_records if start <= iso_date(r["date"]) <= end]
+    amount_period_keys = {transaction_key(kind, row) for row, kind in amount_period}
     for row, kind in pre: engines[row["product_id"]].process(row, kind)
     opening = deepcopy(engines)
     for row, kind in period: engines[row["product_id"]].process(row, kind)
@@ -474,32 +603,61 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
         opening_unconfirmed = sum((dec(sale["unconfirmed_quantity"]) for sale in opening_outputs), ZERO)
         period_unconfirmed = sum((dec(sale["unconfirmed_quantity"]) for sale in period_outputs), ZERO)
         all_unconfirmed = opening_unconfirmed + period_unconfirmed
-        product_amount_errors = [error for error in amount_validation_errors if error.get("product_id") == product_id and error.get("date") and start <= iso_date(error["date"]) <= end]
-        status = "error" if future.errors or product_id in linked_backfill_error_products or any(error["affects_fifo_cost"] or error["affects_revenue"] for error in product_amount_errors) else ("unconfirmed" if all_unconfirmed > ZERO else ("backfilled" if all_backfilled_qty > ZERO else "confirmed"))
+        direct_fifo_errors = []
+        for error in errors:
+            if error.get("product_id") != product_id or not error.get("affects_fifo_cost"):
+                continue
+            try:
+                if start <= iso_date(error.get("date")) <= end:
+                    direct_fifo_errors.append(error)
+            except ValueError:
+                # Date-less or malformed records are global FIFO diagnostics;
+                # they cannot safely be attached to a product-period row.
+                continue
+        # FIFO status deliberately ignores amount-component validation.  Its
+        # only inputs are FIFO eligibility and allocation-rule errors.
+        status = "error" if future.errors or direct_fifo_errors or product_id in linked_backfill_error_products else ("unconfirmed" if all_unconfirmed > ZERO else ("backfilled" if all_backfilled_qty > ZERO else "confirmed"))
         inv = sheet_qty.get(product_id); book = inventory_qty.get(product_id, ZERO); difference = inv-book if product_id in sheet_qty else None
         recon = "inventory_only" if product_id not in ledger_ids else ("ledger_only" if inv is None else ("inventory_negative_stock" if inv < ZERO else ("match" if difference == ZERO else ("inventory_more" if difference > ZERO else "ledger_more"))))
         layer_output = [{"layer_id":l.layer_id,"product_id":l.product_id,"purchase_date":l.purchase_date.isoformat(),"voucher":l.voucher,"excel_row":l.excel_row,"original_quantity":out_number(l.original_quantity),"remaining_quantity":out_number(l.remaining_quantity),"unit_cost":out_number(l.unit_cost),"post_period_end":False,"remaining_amount":out_money(l.remaining_quantity*l.unit_cost)} for l in end_layers]
         prior_settlement_events = [event for event in snapshot.inventory_cost_events if event["event_type"] == "shortage_backfill_consumption" and iso_date(event["date"]) >= start and event.get("sale_date") and iso_date(event["sale_date"]) < start]
         prior_settlement = -sum((dec(event["_cost_decimal"]) for event in prior_settlement_events), ZERO)
         prior_settlement_quantity = -sum((dec(event["quantity"]) for event in prior_settlement_events), ZERO)
-        valid_sales_period = [row for row in sales_period if has_valid_amount(row, "sales")]
-        valid_purchases_period = [row for row in purchases_period if has_valid_amount(row, "purchase")]
-        period_sales_supply = _sum_rows(valid_sales_period, "supply_amount")
-        period_sales_vat = _sum_rows(valid_sales_period, "vat")
-        period_sales_total = _sum_rows(valid_sales_period, "total_amount")
-        period_purchase_supply = _sum_rows(valid_purchases_period, "supply_amount")
-        period_purchase_vat = _sum_rows(valid_purchases_period, "vat")
-        period_purchase_total = _sum_rows(valid_purchases_period, "total_amount")
+        amount_purchases_period = [row for row, kind in amount_period if kind == "purchase" and row.get("product_id") == product_id]
+        amount_sales_period = [row for row, kind in amount_period if kind == "sales" and row.get("product_id") == product_id]
+        period_sales_supply = _sum_rows([row for row in amount_sales_period if has_valid_component(row, "sales", "supply_amount")], "supply_amount")
+        period_sales_vat = _sum_rows([row for row in amount_sales_period if has_valid_component(row, "sales", "vat")], "vat")
+        period_sales_total = _sum_rows([row for row in amount_sales_period if has_valid_component(row, "sales", "total_amount")], "total_amount")
+        period_purchase_supply = _sum_rows([row for row in amount_purchases_period if has_valid_component(row, "purchase", "supply_amount")], "supply_amount")
+        period_purchase_vat = _sum_rows([row for row in amount_purchases_period if has_valid_component(row, "purchase", "vat")], "vat")
+        period_purchase_total = _sum_rows([row for row in amount_purchases_period if has_valid_component(row, "purchase", "total_amount")], "total_amount")
+        product_amount_states = [
+            state for state in transaction_validations
+            if state.get("product_id") == product_id
+            and transaction_key(str(state["source"]), state) in amount_period_keys
+        ]
+        amount_validation_status = _worst_amount_status(product_amount_states)
         period_unconfirmed_supply = sum((
             dec(sale.row.get("supply_amount")) * sale.unresolved_quantity / sale.original_quantity
             for sale in future.sales
-            if sale.original_quantity and start <= iso_date(sale.row["date"]) <= end and has_valid_amount(sale.row, "sales")
+            if sale.original_quantity and start <= iso_date(sale.row["date"]) <= end and has_valid_component(sale.row, "sales", "supply_amount")
         ), ZERO)
         fifo_sales_cost = sum((dec(e["_cost_decimal"]) for e in s_events), ZERO)
         gross_profit = period_sales_supply - fifo_sales_cost
+        invalid_sales_supply = any(
+            state["source"] == "sales" and not state["supply_amount_valid"]
+            for state in product_amount_states
+        )
+        profit_status = "error" if status == "error" or invalid_sales_supply else ("provisional" if period_unconfirmed > ZERO else "confirmed")
         row = {"product_id":product_id,"item_name":sorted(names[product_id])[0] if names[product_id] else None,"item_names":sorted(names[product_id]),"specification":sorted(specs[product_id])[0] if specs[product_id] else None,"specifications":sorted(specs[product_id]),"opening_stock_quantity":out_number(sum((l.remaining_quantity for l in opened_layers),ZERO)),"opening_stock_amount":out_money(sum((l.remaining_quantity*l.unit_cost for l in opened_layers),ZERO)),"period_purchase_quantity":out_number(sum((dec(r["quantity"]) for r in purchases_period),ZERO)),"period_purchase_cost_amount":out_money(sum((dec(e["_cost_decimal"]) for e in p_events),ZERO)),"period_sales_quantity":out_number(sum((dec(r["quantity"]) for r in sales_period),ZERO)),"period_sales_supply_amount":out_money(period_sales_supply),"period_sales_supply_amount_exact":exact_money(period_sales_supply),"period_sales_vat_amount":out_money(period_sales_vat),"period_sales_total_amount":out_money(period_sales_total),"period_sales_amount":out_money(period_sales_supply),"fifo_sales_cost_amount":out_money(fifo_sales_cost),"fifo_sales_cost_amount_exact":exact_money(fifo_sales_cost),"ending_signed_stock_quantity":out_number(signed),"ending_normal_stock_quantity":out_number(normal_qty),"ending_fifo_inventory_amount":out_money(normal_amt),"ending_negative_stock_quantity":out_number(max(-signed,ZERO)),"period_backfilled_quantity":out_number(period_backfilled_qty),"period_backfilled_amount":out_money(period_backfilled_amt),"all_backfilled_quantity":out_number(all_backfilled_qty),"all_backfilled_amount":out_money(all_backfilled_amt),"post_period_backfill_quantity":out_number(period_backfilled_qty),"post_period_backfill_amount":out_money(period_backfilled_amt),"prior_period_shortage_settlement_quantity":out_number(prior_settlement_quantity),"prior_period_shortage_settlement_amount":out_money(prior_settlement),"backfilled_quantity":out_number(period_backfilled_qty),"backfilled_amount":out_money(period_backfilled_amt),"opening_unconfirmed_quantity":out_number(opening_unconfirmed),"period_unconfirmed_quantity":out_number(period_unconfirmed),"all_unconfirmed_quantity":out_number(all_unconfirmed),"unconfirmed_quantity":out_number(all_unconfirmed),"unconfirmed_sales_supply_amount":out_money(period_unconfirmed_supply),"cost_status":status,"inventory_book_quantity":out_number(book),"inventory_sheet_quantity":out_number(inv) if inv is not None else None,"inventory_quantity_difference":out_number(difference) if difference is not None else None,"quantity_reconciliation_status":recon,"remaining_cost_layers":layer_output,"purchase_quantity":out_number(sum((dec(r["quantity"]) for r in purchases_period),ZERO)),"sales_quantity":out_number(sum((dec(r["quantity"]) for r in sales_period),ZERO)),"calculated_stock_quantity":out_number(book),"inventory_quantity":out_number(inv) if inv is not None else None,"quantity_difference":out_number(difference) if difference is not None else None,"period_purchase_supply_amount":out_money(period_purchase_supply),"period_purchase_vat_amount":out_money(period_purchase_vat),"period_purchase_total_amount":out_money(period_purchase_total),"purchase_amount":out_money(period_purchase_supply),"sales_amount":out_money(period_sales_supply)}
         row["gross_profit"] = out_money(gross_profit)
-        row["gross_profit_rate"] = out_number(gross_profit / period_sales_supply * Decimal("100")) if period_sales_supply and status == "confirmed" else None
+        row.update(
+            gross_profit_exact=exact_money(gross_profit),
+            amount_validation_status=amount_validation_status,
+            amount_validation_error_count=sum(state["amount_validation_status"] != "valid" for state in product_amount_states),
+            profit_status=profit_status,
+            gross_profit_rate=out_number(gross_profit / period_sales_supply * Decimal("100")) if period_sales_supply and profit_status == "confirmed" else None,
+        )
         rows.append(row)
         for sale in outputs:
             if sale["unconfirmed_quantity"]: unconfirmed.append(sale)
@@ -510,18 +668,18 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
     # JSON readability, while every summary remains a direct Decimal sum.
     period_purchases = [row for row, kind in period if kind == "purchase"]
     period_sales = [row for row, kind in period if kind == "sales"]
+    amount_period_purchases = [row for row, kind in amount_period if kind == "purchase"]
+    amount_period_sales = [row for row, kind in amount_period if kind == "sales"]
     opening_amount = sum((sum((layer.remaining_quantity * layer.unit_cost for layer in engine.layers if layer.remaining_quantity > ZERO), ZERO) for engine in opening.values()), ZERO)
     ending_amount = sum((sum((layer.remaining_quantity * layer.unit_cost for layer in engine.layers if layer.remaining_quantity > ZERO and not layer.post_period_end), ZERO) for engine in ending.values()), ZERO)
     period_purchase_cost = sum((event["_cost_decimal"] for engine in ending.values() for event in engine.purchase_cost_events if start <= iso_date(event["date"]) <= end), ZERO)
     fifo_sales_cost = sum((event["_cost_decimal"] for engine in continuation.values() for event in engine.sales_cost_events if start <= iso_date(event["date"]) <= end), ZERO)
-    valid_period_sales = [row for row in period_sales if has_valid_amount(row, "sales")]
-    valid_period_purchases = [row for row in period_purchases if has_valid_amount(row, "purchase")]
-    period_sales_supply = _sum_rows(valid_period_sales, "supply_amount")
-    period_sales_vat = _sum_rows(valid_period_sales, "vat")
-    period_sales_total = _sum_rows(valid_period_sales, "total_amount")
-    period_purchase_supply = _sum_rows(valid_period_purchases, "supply_amount")
-    period_purchase_vat = _sum_rows(valid_period_purchases, "vat")
-    period_purchase_total = _sum_rows(valid_period_purchases, "total_amount")
+    period_sales_supply = _sum_rows([row for row in amount_period_sales if has_valid_component(row, "sales", "supply_amount")], "supply_amount")
+    period_sales_vat = _sum_rows([row for row in amount_period_sales if has_valid_component(row, "sales", "vat")], "vat")
+    period_sales_total = _sum_rows([row for row in amount_period_sales if has_valid_component(row, "sales", "total_amount")], "total_amount")
+    period_purchase_supply = _sum_rows([row for row in amount_period_purchases if has_valid_component(row, "purchase", "supply_amount")], "supply_amount")
+    period_purchase_vat = _sum_rows([row for row in amount_period_purchases if has_valid_component(row, "purchase", "vat")], "vat")
+    period_purchase_total = _sum_rows([row for row in amount_period_purchases if has_valid_component(row, "purchase", "total_amount")], "total_amount")
     gross_profit = period_sales_supply - fifo_sales_cost
     vat_settlement = period_sales_vat - period_purchase_vat
     opening_unconfirmed_quantity = sum((dec(row["opening_unconfirmed_quantity"]) for row in rows), ZERO)
@@ -530,7 +688,7 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
     unconfirmed_sales_supply = sum((
         dec(sale.row.get("supply_amount")) * sale.unresolved_quantity / sale.original_quantity
         for engine in continuation.values() for sale in engine.sales
-        if sale.original_quantity and start <= iso_date(sale.row["date"]) <= end and has_valid_amount(sale.row, "sales")
+        if sale.original_quantity and start <= iso_date(sale.row["date"]) <= end and has_valid_component(sale.row, "sales", "supply_amount")
     ), ZERO)
     period_post_period_backfill = sum((
         allocation["_quantity"] * allocation["_unit_cost"]
@@ -616,21 +774,40 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
                 vat_errors.append(error)
         except ValueError:
             vat_errors.append(error)
+    period_amount_states = [
+        state for state in transaction_validations
+        if transaction_key(str(state["source"]), state) in amount_period_keys
+    ]
+    amount_validation_status = _worst_amount_status(period_amount_states)
+    period_amount_errors = [
+        error for error in amount_validation_errors
+        if transaction_key(str(error["source"]), error) in amount_period_keys
+    ]
+    global_fifo_error_count = sum(
+        error.get("product_id") in (None, "") and error.get("affects_fifo_cost")
+        for error in calculation_errors
+    )
+    post_vat_reference = gross_profit - vat_settlement
+    balance_left = period_sales_supply + ending_amount + prior_settlement
+    balance_right = opening_amount + period_purchase_cost + period_post_period_backfill + gross_profit
     summary={
-        "opening_stock_amount":out_money(opening_amount), "period_purchase_cost_amount":out_money(period_purchase_cost),
+        "opening_stock_amount":out_money(opening_amount), "opening_stock_amount_exact":exact_money(opening_amount),
+        "period_purchase_cost_amount":out_money(period_purchase_cost), "period_purchase_cost_amount_exact":exact_money(period_purchase_cost),
         "period_sales_supply_amount":out_money(period_sales_supply), "period_sales_supply_amount_exact":exact_money(period_sales_supply), "period_sales_vat_amount":out_money(period_sales_vat), "period_sales_total_amount":out_money(period_sales_total),
-        "period_purchase_supply_amount":out_money(period_purchase_supply), "period_purchase_vat_amount":out_money(period_purchase_vat), "period_purchase_total_amount":out_money(period_purchase_total),
+        "period_sales_vat_amount_exact":exact_money(period_sales_vat), "period_sales_total_amount_exact":exact_money(period_sales_total),
+        "period_purchase_supply_amount":out_money(period_purchase_supply), "period_purchase_supply_amount_exact":exact_money(period_purchase_supply), "period_purchase_vat_amount":out_money(period_purchase_vat), "period_purchase_vat_amount_exact":exact_money(period_purchase_vat), "period_purchase_total_amount":out_money(period_purchase_total), "period_purchase_total_amount_exact":exact_money(period_purchase_total),
         "period_sales_amount":out_money(period_sales_supply), "purchase_amount":out_money(period_purchase_supply), "sales_amount":out_money(period_sales_supply),
         "fifo_sales_cost_amount":out_money(fifo_sales_cost), "fifo_sales_cost_amount_exact":exact_money(fifo_sales_cost), "gross_profit":out_money(gross_profit), "gross_profit_exact":exact_money(gross_profit),
         "gross_profit_rate":out_number(gross_profit / period_sales_supply * Decimal("100")) if period_sales_supply and gross_profit_status == "confirmed" else None,
-        "gross_profit_status":gross_profit_status, "unconfirmed_sales_supply_amount":out_money(unconfirmed_sales_supply),
+        "gross_profit_status":gross_profit_status, "profit_status":gross_profit_status, "unconfirmed_sales_supply_amount":out_money(unconfirmed_sales_supply), "unconfirmed_sales_supply_amount_exact":exact_money(unconfirmed_sales_supply),
         "vat_settlement_amount":out_money(vat_settlement), "vat_settlement_status":"validation_error" if vat_errors else ("payable" if vat_settlement > ZERO else ("refundable" if vat_settlement < ZERO else "zero")),
-        "post_vat_reference_amount":out_money(gross_profit - vat_settlement),
+        "post_vat_reference_amount":out_money(post_vat_reference), "post_vat_reference_amount_exact":exact_money(post_vat_reference),
         "post_vat_reference_status":"error" if vat_errors or gross_profit_status == "error" else ("provisional" if gross_profit_status != "confirmed" else "confirmed"),
-        "ending_fifo_inventory_amount":out_money(ending_amount), "inventory_amount_at_fifo":out_money(ending_amount),
-        "period_backfilled_quantity":out_number(sum((dec(row["period_backfilled_quantity"]) for row in rows), ZERO)), "period_backfilled_amount":out_money(period_post_period_backfill), "all_backfilled_quantity":out_number(all_post_period_backfill_quantity), "all_backfilled_amount":out_money(all_post_period_backfill),
-        "post_period_backfill_amount":out_money(period_post_period_backfill), "backfilled_amount":out_money(period_post_period_backfill),
-        "prior_period_shortage_settlement_quantity":out_number(prior_settlement_quantity), "prior_period_shortage_settlement_amount":out_money(prior_settlement),
+        "ending_fifo_inventory_amount":out_money(ending_amount), "ending_fifo_inventory_amount_exact":exact_money(ending_amount), "inventory_amount_at_fifo":out_money(ending_amount),
+        "period_backfilled_quantity":out_number(sum((dec(row["period_backfilled_quantity"]) for row in rows), ZERO)), "period_backfilled_amount":out_money(period_post_period_backfill), "period_backfilled_amount_exact":exact_money(period_post_period_backfill), "all_backfilled_quantity":out_number(all_post_period_backfill_quantity), "all_backfilled_amount":out_money(all_post_period_backfill), "all_backfilled_amount_exact":exact_money(all_post_period_backfill),
+        "post_period_backfill_amount":out_money(period_post_period_backfill), "post_period_backfill_amount_exact":exact_money(period_post_period_backfill), "backfilled_amount":out_money(period_post_period_backfill),
+        "prior_period_shortage_settlement_quantity":out_number(prior_settlement_quantity), "prior_period_shortage_settlement_amount":out_money(prior_settlement), "prior_period_shortage_settlement_amount_exact":exact_money(prior_settlement),
+        "amount_balance_left_exact":exact_money(balance_left), "amount_balance_right_exact":exact_money(balance_right), "amount_balance_difference_exact":exact_money(balance_left - balance_right), "amount_balance_status":"match" if balance_left == balance_right else "mismatch",
         "remainder_at_fifo":out_money(gross_profit), "inventory_amount_at_average_cost":None,"inventory_amount_at_latest_purchase_price":None,"remainder_at_average_cost":None,"remainder_at_latest_purchase_price":None,
     }
     def total(key: str) -> Decimal: return sum((dec(row[key]) for row in rows), ZERO)
@@ -639,12 +816,12 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
     summary["period_unconfirmed_quantity"] = out_number(period_unconfirmed_quantity)
     summary["all_unconfirmed_quantity"] = out_number(all_unconfirmed_quantity)
     summary["unconfirmed_quantity"] = out_number(all_unconfirmed_quantity)
-    summary.update({"cost_status_counts":status_counts,"status_counts":status_counts,"quantity_reconciliation_mismatch_count":sum(r["quantity_reconciliation_status"] != "match" for r in rows),"inventory_reconciliation_mismatch_count":sum(r["quantity_reconciliation_status"] != "match" for r in rows),"error_count":len(errors)+len(amount_validation_errors)+len(engine_errors),"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":len(amount_validation_errors),"reconciliation_status_counts":recon_counts,"unassigned_backfill_validation_error":unassigned_backfill_validation_error})
+    summary.update({"cost_status_counts":status_counts,"status_counts":status_counts,"quantity_reconciliation_mismatch_count":sum(r["quantity_reconciliation_status"] != "match" for r in rows),"inventory_reconciliation_mismatch_count":sum(r["quantity_reconciliation_status"] != "match" for r in rows),"error_count":len(errors)+len(amount_validation_errors)+len(engine_errors),"amount_validation_status":amount_validation_status,"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":len(period_amount_errors),"global_fifo_error_count":global_fifo_error_count,"reconciliation_status_counts":recon_counts,"unassigned_backfill_validation_error":unassigned_backfill_validation_error})
     summary.update({
-        "period_purchase_record_count": len(period_purchases),
-        "period_sales_record_count": len(period_sales),
-        "period_purchase_company_count": len({str(row.get("company")).strip() for row in period_purchases if row.get("company") not in (None, "")}),
-        "period_sales_company_count": len({str(row.get("company")).strip() for row in period_sales if row.get("company") not in (None, "")}),
+        "period_purchase_record_count": len(amount_period_purchases),
+        "period_sales_record_count": len(amount_period_sales),
+        "period_purchase_company_count": len({str(row.get("company")).strip() for row in amount_period_purchases if row.get("company") not in (None, "")}),
+        "period_sales_company_count": len({str(row.get("company")).strip() for row in amount_period_sales if row.get("company") not in (None, "")}),
     })
     warnings=[]
     for product_id in sorted(product_ids,key=str):
@@ -652,4 +829,4 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
         if len(specs[product_id])>1: warnings.append({"code":"specification_mismatch","product_id":product_id,"values":sorted(specs[product_id])})
     public_events=[_clean(e) for engine in continuation.values() for e in engine.sales_cost_events]; public_unconfirmed_events=[_clean(e) for engine in continuation.values() for e in engine.unconfirmed_quantity_events]; public_purchases=[_clean(e) for engine in continuation.values() for e in engine.purchase_cost_events]; public_inventory_events=[_clean(e) for engine in ending.values() for e in engine.inventory_cost_events]
     all_dates=[iso_date(r["date"]) for r,k in events]; purchase_dates=[iso_date(r["date"]) for r,k in events if k=="purchase"]
-    return {"metadata":{"period_start":start.isoformat(),"period_end":end.isoformat(),"inventory_date":stock_date.isoformat(),"analysis_start_date":start.isoformat(),"analysis_end_date":end.isoformat(),"inventory_reference_date":stock_date.isoformat(),"input_data_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_data_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_data_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"input_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"backfill_last_purchase_date":max((a["purchase_date"] for a in backfills),default=None),"costing_method":"FIFO","inventory_unit_costs_used":False,"inventory_price_fields_ignored":["average_cost","latest_purchase_price","sales_price"]},"summary":summary,"rows":rows,"sales_allocations":all_sales,"sales_cost_events":public_events,"unconfirmed_quantity_events":public_unconfirmed_events,"purchase_cost_events":public_purchases,"inventory_cost_events":public_inventory_events,"unconfirmed_shipments":unconfirmed,"backfill_allocations":backfills,"cancellation_events":[event for engine in continuation.values() for event in engine.cancellations],"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":len(amount_validation_errors),"errors":errors+amount_validation_errors+engine_errors,"warnings":warnings,"calculated_negative_stock":[row for row in rows if dec(row["ending_signed_stock_quantity"])<ZERO],"inventory_negative_stock":[row for row in rows if row["quantity_reconciliation_status"]=="inventory_negative_stock"],"quantity_mismatches":[row for row in rows if row["quantity_reconciliation_status"]!="match"]}
+    return {"metadata":{"period_start":start.isoformat(),"period_end":end.isoformat(),"inventory_date":stock_date.isoformat(),"analysis_start_date":start.isoformat(),"analysis_end_date":end.isoformat(),"inventory_reference_date":stock_date.isoformat(),"input_data_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_data_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_data_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"input_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"backfill_last_purchase_date":max((a["purchase_date"] for a in backfills),default=None),"costing_method":"FIFO","inventory_unit_costs_used":False,"inventory_price_fields_ignored":["average_cost","latest_purchase_price","sales_price"]},"summary":summary,"rows":rows,"sales_allocations":all_sales,"sales_cost_events":public_events,"unconfirmed_quantity_events":public_unconfirmed_events,"purchase_cost_events":public_purchases,"inventory_cost_events":public_inventory_events,"unconfirmed_shipments":unconfirmed,"backfill_allocations":backfills,"cancellation_events":[event for engine in continuation.values() for event in engine.cancellations],"transaction_validations":transaction_validations,"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":summary["amount_validation_error_count"],"errors":errors+amount_validation_errors+engine_errors,"warnings":warnings,"calculated_negative_stock":[row for row in rows if dec(row["ending_signed_stock_quantity"])<ZERO],"inventory_negative_stock":[row for row in rows if row["quantity_reconciliation_status"]=="inventory_negative_stock"],"quantity_mismatches":[row for row in rows if row["quantity_reconciliation_status"]!="match"]}

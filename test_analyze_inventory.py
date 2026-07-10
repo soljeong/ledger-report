@@ -260,7 +260,7 @@ class InventoryAnalysisTests(unittest.TestCase):
         sell = sale("2026-01-02", 1, amount=110)
         sell.update(supply_amount=100, vat=10, total_amount=111)
         result = analyze([buy], [sell], [inventory(0)])
-        self.assertEqual(result["summary"]["vat_settlement_amount"], -20)
+        self.assertEqual(result["summary"]["vat_settlement_amount"], -10)
         self.assertEqual(result["summary"]["vat_settlement_status"], "validation_error")
         self.assertEqual(result["summary"]["amount_validation_error_count"], 1)
         self.assertEqual(result["amount_validation_errors"][0]["code"], "amount_components_mismatch")
@@ -333,10 +333,10 @@ class InventoryAnalysisTests(unittest.TestCase):
         self.assertEqual(result["summary"]["fifo_sales_cost_amount"], 1)
         self.assertEqual([event["cost_amount_exact"] for event in result["sales_cost_events"]], ["0.49", "0.49"])
 
-    def test_missing_product_sale_propagates_profit_and_vat_error(self):
+    def test_missing_product_sale_propagates_profit_without_invalidating_vat(self):
         result = analyze([purchase("2026-01-01", 1, 100)], [sale("2026-01-02", 1, product_id=None, amount=100)], [inventory(1)])
         self.assertEqual(result["summary"]["gross_profit_status"], "error")
-        self.assertEqual(result["summary"]["vat_settlement_status"], "validation_error")
+        self.assertEqual(result["summary"]["vat_settlement_status"], "zero")
 
     def test_opening_and_period_unconfirmed_quantities_are_separate(self):
         result = analyze(
@@ -369,6 +369,78 @@ class InventoryAnalysisTests(unittest.TestCase):
         result = analyze([purchase("2026-01-01", 1, 100)], [bad], [inventory(1)])
         self.assertEqual(result["summary"]["period_sales_record_count"], 0)
         self.assertEqual(result["errors"][0]["code"], "invalid_record")
+
+    def test_component_mismatch_keeps_supply_and_vat_but_not_fifo_status_error(self):
+        result = analyze(
+            [purchase("2026-01-01", 1, 100)],
+            [dict(sale("2026-01-02", 1, amount=110), supply_amount=100, vat=10, total_amount=111)],
+            [inventory(0)],
+        )
+        summary, row = result["summary"], result["rows"][0]
+        self.assertEqual((summary["period_sales_supply_amount"], summary["period_sales_vat_amount"], summary["period_sales_total_amount"]), (100, 10, 111))
+        self.assertEqual(summary["vat_settlement_status"], "validation_error")
+        self.assertEqual((row["cost_status"], row["amount_validation_status"]), ("confirmed", "component_mismatch"))
+
+    def test_unconfirmed_fifo_status_survives_component_mismatch(self):
+        result = analyze(
+            [],
+            [dict(sale("2026-01-02", 1, amount=110), supply_amount=100, vat=10, total_amount=111)],
+            [inventory(-1)],
+        )
+        self.assertEqual((result["rows"][0]["cost_status"], result["rows"][0]["amount_validation_status"]), ("unconfirmed", "component_mismatch"))
+        self.assertEqual((result["summary"]["cost_status_counts"]["unconfirmed"], result["summary"]["cost_status_counts"]["error"]), (1, 0))
+
+    def test_missing_product_sale_keeps_amount_stream_and_exposes_fifo_error(self):
+        result = analyze([purchase("2026-01-01", 1, 100)], [sale("2026-01-02", 1, product_id=None, amount=100)], [inventory(1)])
+        summary = result["summary"]
+        self.assertEqual((summary["period_sales_supply_amount"], summary["period_sales_vat_amount"]), (100, 0))
+        self.assertEqual(summary["gross_profit_status"], "error")
+        self.assertEqual(summary["global_fifo_error_count"], 1)
+        state = [state for state in result["transaction_validations"] if state["source"] == "sales"][0]
+        self.assertFalse(state["fifo_eligible"])
+        self.assertTrue(state["supply_amount_valid"])
+
+    def test_invalid_sale_quantity_keeps_supply_amount(self):
+        broken = sale("2026-01-02", 1, amount=100)
+        broken["quantity"] = "not-a-number"
+        result = analyze([purchase("2026-01-01", 1, 100)], [broken], [inventory(1)])
+        self.assertEqual(result["summary"]["period_sales_supply_amount"], 100)
+        self.assertEqual(result["summary"]["gross_profit_status"], "error")
+
+    def test_invalid_purchase_unit_price_keeps_purchase_supply_and_vat(self):
+        broken = purchase("2026-01-01", 1, 100)
+        broken.update(unit_price="not-a-number", supply_amount=100, vat=10, total_amount=110)
+        result = analyze([broken], [], [inventory(0)])
+        self.assertEqual((result["summary"]["period_purchase_supply_amount"], result["summary"]["period_purchase_vat_amount"]), (100, 10))
+        self.assertEqual(result["rows"][0]["cost_status"], "error")
+
+    def test_invalid_supply_is_excluded_without_total_amount_substitution(self):
+        broken = sale("2026-01-02", 1, amount=110)
+        broken.update(supply_amount="bad", vat=10, total_amount=110)
+        result = analyze([purchase("2026-01-01", 1, 100)], [broken], [inventory(0)])
+        self.assertEqual(result["summary"]["period_sales_supply_amount"], 0)
+        self.assertEqual(result["summary"]["period_sales_total_amount"], 110)
+        self.assertEqual(result["summary"]["gross_profit_status"], "error")
+
+    def test_invalid_vat_is_excluded_while_supply_remains(self):
+        broken = sale("2026-01-02", 1, amount=100)
+        broken.update(supply_amount=100, vat="bad", total_amount=100)
+        result = analyze([purchase("2026-01-01", 1, 100)], [broken], [inventory(0)])
+        self.assertEqual((result["summary"]["period_sales_supply_amount"], result["summary"]["period_sales_vat_amount"]), (100, 0))
+        self.assertEqual(result["summary"]["vat_settlement_status"], "validation_error")
+
+    def test_fifo_cancellation_error_does_not_invalidate_vat_stream(self):
+        result = analyze([purchase("2026-01-01", 1, 100)], [sale("2026-01-02", -2, amount=-200)], [inventory(1)])
+        self.assertEqual(result["rows"][0]["cost_status"], "error")
+        self.assertEqual(result["summary"]["vat_settlement_status"], "zero")
+
+    def test_summary_exposes_exact_balance_components(self):
+        result = analyze([purchase("2026-01-01", 2, "0.49")], [sale("2026-01-02", 2, amount=2)], [inventory(0)])
+        summary = result["summary"]
+        self.assertEqual(summary["period_purchase_cost_amount_exact"], "0.98")
+        self.assertEqual(summary["fifo_sales_cost_amount_exact"], "0.98")
+        self.assertEqual(summary["gross_profit_exact"], "1.02")
+        self.assertEqual(summary["amount_balance_status"], "match")
 
 
 if __name__ == "__main__":
