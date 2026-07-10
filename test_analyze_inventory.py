@@ -338,6 +338,38 @@ class InventoryAnalysisTests(unittest.TestCase):
         self.assertEqual(result["summary"]["gross_profit_status"], "error")
         self.assertEqual(result["summary"]["vat_settlement_status"], "validation_error")
 
+    def test_opening_and_period_unconfirmed_quantities_are_separate(self):
+        result = analyze(
+            [], [sale("2025-12-31", 4, amount=400), sale("2026-01-02", 3, voucher=2, excel_row=2, amount=300)], [inventory(-7)],
+            start="2026-01-01", end="2026-01-31", stock_date="2026-01-31",
+        )
+        summary = result["summary"]
+        self.assertEqual((summary["opening_unconfirmed_quantity"], summary["period_unconfirmed_quantity"], summary["all_unconfirmed_quantity"]), (4, 3, 7))
+        self.assertEqual(summary["gross_profit_status"], "provisional")
+        self.assertEqual(len(result["unconfirmed_shipments"]), 2)
+
+    def test_opening_shortage_does_not_make_current_period_profit_provisional(self):
+        result = analyze(
+            [], [sale("2025-12-31", 4, amount=400)], [inventory(-4)],
+            start="2026-01-01", end="2026-01-31", stock_date="2026-01-31",
+        )
+        self.assertEqual(result["summary"]["opening_unconfirmed_quantity"], 4)
+        self.assertEqual(result["summary"]["gross_profit_status"], "confirmed")
+
+    def test_post_period_unrelated_error_does_not_change_profit_or_vat_status(self):
+        result = analyze(
+            [purchase("2026-01-01", 1, 100), purchase("2026-02-01", -2, 100, product_id=2, voucher=2, excel_row=2)],
+            [sale("2026-01-02", 1, amount=200)], [inventory(0)], end="2026-01-31", stock_date="2026-01-31",
+        )
+        self.assertEqual(result["summary"]["gross_profit_status"], "confirmed")
+        self.assertEqual(result["summary"]["vat_settlement_status"], "zero")
+
+    def test_invalid_date_is_recorded_without_aborting_analysis(self):
+        bad = sale("2026/01/02", 1, amount=100)
+        result = analyze([purchase("2026-01-01", 1, 100)], [bad], [inventory(1)])
+        self.assertEqual(result["summary"]["period_sales_record_count"], 0)
+        self.assertEqual(result["errors"][0]["code"], "invalid_record")
+
 
 if __name__ == "__main__":
     unittest.main()

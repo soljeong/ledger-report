@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 from generate_analysis_report_html import (
@@ -122,7 +123,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
             "부가세 정산",
             "매출 공급가액",
             "매입 부가세",
-            "부가세 납부 예상액",
+            "잠정 부가세 정산금",
             "현금 관점의 참고값",
             "validation_error",
             "잠정 매출총이익",
@@ -131,6 +132,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         vat_start = html.index('class="report-page report-page--vat"')
         vat_end = html.index("</article>", vat_start)
         self.assertIn('id="vat-settlement-title"', html[vat_start:vat_end])
+        self.assertNotIn("부가세 납부 예상액", html[vat_start:vat_end])
 
     def test_weekly_and_principal_margin_statuses_hide_non_final_rates(self):
         purchase_rows = [
@@ -146,6 +148,21 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         principal = principal_sales_cost_rows(sales_rows, purchase_rows, {"records": [{"voucher_key": "2026-01-02-2", "principal": "P"}]}, reconciliation)
         self.assertEqual(principal[0]["margin_status"], "error")
         self.assertIsNone(principal[0]["margin_rate"])
+
+    def test_negative_amounts_replace_the_fixed_balance_placeholder(self):
+        sources = deepcopy(load_sources(EXAMPLE_DIR))
+        summary = sources["reconciliation"]["summary"]
+        summary.update(gross_profit_status="confirmed", opening_stock_amount=0, period_purchase_cost_amount=-10, period_sales_supply_amount=10, sales_amount=10, inventory_amount_at_fifo=0, ending_fifo_inventory_amount=0, post_period_backfill_amount=0, prior_period_shortage_settlement_amount=0, gross_profit=0)
+        html = render_report_html(sources)
+        self.assertIn("금액 밸런스 차트는 확정값으로 표시하지 않는다", html)
+        self.assertNotIn("AMOUNT_BALANCE_CHART", html)
+
+    def test_invalid_date_record_does_not_abort_html_generation_or_period_tables(self):
+        sources = deepcopy(load_sources(EXAMPLE_DIR))
+        sources["sales"]["records"].append({"date": "2026/05/12", "voucher": 99, "excel_row": 99, "quantity": 1, "supply_amount": 999, "product_id": 99})
+        html = render_report_html(sources)
+        self.assertIn("거래 단위 오류 상세", html)
+        self.assertNotIn("2026/05/12-99", html)
 
 
 if __name__ == "__main__":
