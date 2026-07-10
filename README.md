@@ -40,12 +40,17 @@ python -m venv .venv
 .venv/bin/python parse_workbooks.py
 .venv/bin/python analyze_validation.py
 .venv/bin/python analyze_inventory.py
+.venv/bin/python export_purchase_voucher_excel.py
+.venv/bin/python export_sales_voucher_excel.py
 .venv/bin/python parse_sales_voucher_metadata.py
 .venv/bin/python generate_analysis_report_html.py
 .venv/bin/python capture_html_a4.py
 ```
 
 기본 입출력은 `private_sources/`, `private_intermediate/`, `private_reports/`를 사용합니다.
+
+- `export_purchase_voucher_excel.py`: `purchase.json`을 `purchase_voucher_groups.xlsx`로 내보내고 전표별 메타데이터 입력 시트를 함께 만듭니다.
+- `export_sales_voucher_excel.py`: `sales.json`을 `sales_voucher_groups.xlsx`로 내보내고 전표별 메타데이터 입력 시트를 함께 만듭니다.
 
 ## Test
 

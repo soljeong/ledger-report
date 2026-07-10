@@ -8,7 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import yaml
 
-from src.charts import principal_margin_figure, weekly_purchase_sales_figure
+from src.charts import principal_margin_figure, weekly_inventory_flow_figure, weekly_purchase_sales_figure
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -19,20 +19,44 @@ class ChartFigureTests(unittest.TestCase):
         spec = yaml.safe_load((BASE_DIR / "report_spec.yaml").read_text(encoding="utf-8"))
         df = pd.DataFrame(
             [
-                {"label": "2026-05-18 ~ 05-24", "purchase_amount": 1000, "sales_amount": 1500},
-                {"label": "2026-05-25 ~ 05-31", "purchase_amount": 2000, "sales_amount": 1200},
+                {"label": "5/18", "sales_amount": 1500, "cost_amount": 1000},
+                {"label": "5/25", "sales_amount": 1200, "cost_amount": 800},
             ]
         )
 
         figure = weekly_purchase_sales_figure(df, spec["charts"]["weekly_purchase_sales"])
 
         self.assertIsInstance(figure, go.Figure)
-        self.assertEqual(figure.layout.title.text, "주간 매입/매출 금액")
-        self.assertEqual(figure.layout.xaxis.title.text, "주간")
+        self.assertFalse(figure.layout.title.text)
+        self.assertEqual(figure.layout.xaxis.title.text, "주 시작일")
         self.assertEqual(figure.layout.yaxis.title.text, "금액")
         self.assertEqual(len(figure.data), 2)
-        self.assertEqual(figure.data[0].name, "매입금액")
-        self.assertEqual(figure.data[1].name, "매출금액")
+        self.assertEqual(figure.data[0].name, "매출금액")
+        self.assertEqual(figure.data[1].name, "매출원가")
+        self.assertEqual(figure.layout.barmode, "overlay")
+
+    def test_weekly_inventory_flow_chart_overlays_sales_on_negative_side(self) -> None:
+        spec = yaml.safe_load((BASE_DIR / "report_spec.yaml").read_text(encoding="utf-8"))
+        df = pd.DataFrame(
+            [
+                {
+                    "label": "2026-04-27",
+                    "purchase_increase": 1000,
+                    "sales_amount": 800,
+                    "outbound_cost_estimate": 500,
+                    "net_change": 500,
+                    "estimated_inventory_amount": 2400,
+                }
+            ]
+        )
+
+        figure = weekly_inventory_flow_figure(df, spec["charts"]["weekly_inventory_flow"])
+
+        self.assertIsInstance(figure, go.Figure)
+        self.assertEqual(figure.layout.xaxis.title.text, "주 시작일")
+        self.assertEqual(figure.layout.barmode, "overlay")
+        self.assertEqual(figure.data[2].name, "주간 매출금액")
+        self.assertEqual(list(figure.data[2].y), [-0.0008])
 
     def test_principal_chart_uses_dataframe_and_report_spec_labels(self) -> None:
         spec = yaml.safe_load((BASE_DIR / "report_spec.yaml").read_text(encoding="utf-8"))
@@ -56,7 +80,7 @@ class ChartFigureTests(unittest.TestCase):
         figure = principal_margin_figure(df, spec["charts"]["principal_margin"])
 
         self.assertIsInstance(figure, go.Figure)
-        self.assertEqual(figure.layout.title.text, "원청별 매출/원가/마진")
+        self.assertFalse(figure.layout.title.text)
         self.assertEqual(figure.layout.xaxis.title.text, "금액")
         self.assertEqual(figure.layout.yaxis.title.text, "원청")
         self.assertEqual(len(figure.data), 2)
@@ -64,6 +88,7 @@ class ChartFigureTests(unittest.TestCase):
         self.assertEqual(figure.data[1].name, "매출원가")
         self.assertGreaterEqual(figure.layout.margin.r, 120)
         self.assertIs(figure.data[0].cliponaxis, False)
+        self.assertEqual(figure.layout.barmode, "overlay")
 
 
 if __name__ == "__main__":
