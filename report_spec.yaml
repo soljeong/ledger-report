@@ -1,28 +1,28 @@
 report:
   title: "매입/매출 재고 분석 보고서"
-  scope: "요약, 금액 대사, 주간 재고흐름, 주간 그래프, 원청별 마진, 매출 TOP"
+  scope: "요약, 금액 대사, 주간 재고흐름, 주간 매출, 원청별 매출"
 
 plotly:
   include_plotlyjs: inline
 
 charts:
   weekly_purchase_sales:
-    title: "주간 매입/매출 금액"
-    x_axis_title: "주간"
+    title: "주간 매출"
+    x_axis_title: "주 시작일"
     y_axis_title: "금액"
     unit_label: "원"
     height: 380
     series:
-      purchase_amount:
-        label: "매입금액"
-        color: "#2f6f7e"
       sales_amount:
         label: "매출금액"
+        color: "#b54708"
+      cost_amount:
+        label: "매출원가"
         color: "#c47a23"
 
   weekly_inventory_flow:
     title: "주간 재고금액 흐름: 매입은 위, 출고는 아래"
-    x_axis_title: "주 종료일"
+    x_axis_title: "주 시작일"
     y_axis_title: "주간 증감 금액 (백만원)"
     secondary_y_axis_title: "주말 추정 재고금액 (백만원)"
     unit_label: "백만원"
@@ -35,12 +35,15 @@ charts:
       outbound_cost_estimate:
         label: "주간 출고 감소(추정원가)"
         color: "#c47a23"
+      sales_amount:
+        label: "주간 매출금액"
+        color: "#b54708"
       estimated_inventory_amount:
         label: "주말 추정 재고금액"
         color: "#344054"
 
   principal_margin:
-    title: "원청별 매출/원가/마진"
+    title: "원청별 매출"
     x_axis_title: "금액"
     y_axis_title: "원청"
     unit_label: "원"
@@ -48,7 +51,7 @@ charts:
     series:
       sales_amount:
         label: "매출금액"
-        color: "#2f6f7e"
+        color: "#b54708"
       cost_amount:
         label: "매출원가"
-        color: "#7b8794"
+        color: "#c47a23"

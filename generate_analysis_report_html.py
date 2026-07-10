@@ -29,7 +29,7 @@ def weekly_inventory_flow_rows(
 ) -> list[dict[str, Any]]:
     """Estimate weekly inventory value using current average cost as the outbound cost proxy."""
     purchase_df = _numeric_frame(purchase_records, ("quantity", "supply_amount", "product_id"))
-    sales_df = _numeric_frame(sales_records, ("quantity", "supply_amount", "product_id"))
+    sales_df = _numeric_frame(sales_records, ("quantity", "supply_amount", "total_amount", "product_id"))
     inventory_df = _numeric_frame(inventory_records, ("stock_quantity", "average_cost", "product_id"))
 
     for frame in (purchase_df, sales_df):
@@ -74,15 +74,20 @@ def weekly_inventory_flow_rows(
 
     daily = pd.DataFrame(index=pd.date_range(min(date_starts), max(date_ends), freq="D"))
     daily["purchase_increase"] = purchase_df.groupby("date")["supply_amount"].sum()
+    daily["sales_amount"] = sales_df.groupby("date")["total_amount"].sum()
     daily["outbound_cost_estimate"] = sales_cost.groupby("date")["sales_cost_proxy"].sum()
     daily = daily.fillna(0)
     daily["net_change"] = daily["purchase_increase"] - daily["outbound_cost_estimate"]
 
     opening_stock_amount = current_stock_amount - float(daily["net_change"].sum())
     daily["estimated_inventory_amount"] = opening_stock_amount + daily["net_change"].cumsum()
-    weekly = daily.resample("W-MON").agg(
+    daily["week_start"] = [
+        _base.week_start(timestamp.date().isoformat()).isoformat() for timestamp in daily.index.to_pydatetime()
+    ]
+    weekly = daily.groupby("week_start", sort=True).agg(
         {
             "purchase_increase": "sum",
+            "sales_amount": "sum",
             "outbound_cost_estimate": "sum",
             "net_change": "sum",
             "estimated_inventory_amount": "last",
@@ -91,14 +96,15 @@ def weekly_inventory_flow_rows(
 
     return [
         {
-            "week_end": week_end.date().isoformat(),
-            "label": week_end.strftime("%m/%d"),
+            "week_start": week_start,
+            "label": f"{pd.Timestamp(week_start).month}/{pd.Timestamp(week_start).day}",
             "purchase_increase": float(row["purchase_increase"]),
+            "sales_amount": float(row["sales_amount"]),
             "outbound_cost_estimate": float(row["outbound_cost_estimate"]),
             "net_change": float(row["net_change"]),
             "estimated_inventory_amount": float(row["estimated_inventory_amount"]),
         }
-        for week_end, row in weekly.iterrows()
+        for week_start, row in weekly.iterrows()
     ]
 
 
@@ -106,7 +112,7 @@ def render_weekly_inventory_flow_table_rows(rows: list[dict[str, Any]]) -> str:
     return "\n".join(
         f"""
           <tr>
-            <th>{escape(row['week_end'])}</th>
+            <th>{escape(row['label'])}</th>
             <td class="money">{_base.money(row['purchase_increase'])}</td>
             <td class="money">{_base.money(row['outbound_cost_estimate'])}</td>
             <td class="money">{_base.money(row['net_change'])}</td>
@@ -137,14 +143,20 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     inserted = f"""
       <h3 id="inventory-flow-title" style="margin:28px 0 10px;font-size:17px;">{escape(chart_spec['title'])}</h3>
       <p class="section-note">매입은 공급금액으로 증가, 출고는 매출수량 × 현재 평균원가로 감소시켰다. 현재재고에서 기간 순증감을 역산해 기초재고를 추정한다.</p>
-      <p class="section-note">주 종료일은 W-MON 기준이며, 막대는 주간 증감·선은 주말 추정 재고금액이다.</p>
+      <p class="section-note">주 시작일 기준으로 묶었고, 막대는 주간 매입 증가·주간 출고 감소·주간 매출금액, 선은 주말 추정 재고금액이다.</p>
       <p class="section-note">표시 단위: {escape(chart_spec.get('unit_label', '백만원'))}</p>
+      <div class="legend">
+        <span><i class="purchase-chip"></i>{escape(chart_spec["series"]["purchase_increase"]["label"])}</span>
+        <span><i class="outbound-chip"></i>{escape(chart_spec["series"]["outbound_cost_estimate"]["label"])}</span>
+        <span><i class="revenue-chip"></i>{escape(chart_spec["series"]["sales_amount"]["label"])}</span>
+        <span><i class="inventory-chip"></i>{escape(chart_spec["series"]["estimated_inventory_amount"]["label"])}</span>
+      </div>
       {chart}
       <div class="table-scroll">
         <table>
           <thead>
             <tr>
-              <th>주 종료일</th>
+              <th>주 시작일</th>
               <th class="money">매입 증가</th>
               <th class="money">출고 감소(추정원가)</th>
               <th class="money">순증감</th>
@@ -156,7 +168,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
       </div>
     """
     marker = (
-        '      <p class="formula">나머지 = 매출금액 + 재고금액 - 매입금액. '
+        '      <p class="formula">이익 = 매출금액 + 재고금액 - 매입금액. '
         '재고금액은 평균원가 기준이다.</p>\n    </section>'
     )
     if marker not in html:

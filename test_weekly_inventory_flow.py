@@ -29,10 +29,12 @@ class WeeklyInventoryFlowTests(unittest.TestCase):
             sources["inventory"]["records"],
         )
 
-        self.assertEqual(rows[0]["week_end"], "2026-05-04")
+        self.assertEqual(rows[0]["week_start"], "2026-04-27")
         self.assertEqual(rows[0]["purchase_increase"], 740_000)
+        self.assertEqual(rows[0]["sales_amount"], 0)
+        self.assertEqual(rows[1]["sales_amount"], 462_000)
         self.assertEqual(rows[0]["estimated_inventory_amount"], 835_000)
-        self.assertEqual(rows[-1]["week_end"], "2026-06-22")
+        self.assertEqual(rows[-1]["week_start"], "2026-06-15")
         self.assertEqual(rows[-1]["estimated_inventory_amount"], 676_500)
 
     def test_chart_uses_signed_bars_and_secondary_axis(self) -> None:
@@ -40,15 +42,17 @@ class WeeklyInventoryFlowTests(unittest.TestCase):
         frame = pd.DataFrame(
             [
                 {
-                    "label": "05/04",
+                    "label": "2026-04-27",
                     "purchase_increase": 2_000_000,
+                    "sales_amount": 800_000,
                     "outbound_cost_estimate": 500_000,
                     "net_change": 1_500_000,
                     "estimated_inventory_amount": 3_000_000,
                 },
                 {
-                    "label": "05/11",
+                    "label": "2026-05-04",
                     "purchase_increase": 0,
+                    "sales_amount": 900_000,
                     "outbound_cost_estimate": 700_000,
                     "net_change": -700_000,
                     "estimated_inventory_amount": 2_300_000,
@@ -61,17 +65,20 @@ class WeeklyInventoryFlowTests(unittest.TestCase):
         self.assertIsInstance(figure, go.Figure)
         self.assertEqual(len(figure.data), 4)
         self.assertEqual(list(figure.data[1].y), [-0.5, -0.7])
-        self.assertEqual(figure.data[2].yaxis, "y2")
+        self.assertEqual(list(figure.data[2].y), [-0.8, -0.9])
+        self.assertEqual(figure.data[3].yaxis, "y2")
         self.assertEqual(figure.layout.yaxis2.overlaying, "y")
 
     def test_report_embeds_chart_and_weekly_table_in_amount_section(self) -> None:
         html = render_report_html(load_sources(EXAMPLE_DIR), load_report_spec(BASE_DIR / "report_spec.yaml"))
 
         self.assertIn("주간 재고금액 흐름: 매입은 위, 출고는 아래", html)
-        self.assertIn("주간 출고 감소(추정원가)", html)
+        self.assertIn("주간 출고 감소·주간 매출금액", html)
         self.assertIn("주말 추정 재고금액", html)
-        self.assertIn("주 종료일", html)
+        self.assertIn("4/27", html)
         self.assertIn("676,500", html)
+        self.assertIn("<th class=\"money\">매입 증가</th>", html)
+        self.assertIn("<th class=\"money\">출고 감소(추정원가)</th>", html)
 
 
 if __name__ == "__main__":

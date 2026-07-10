@@ -142,24 +142,63 @@ def week_start(value: str) -> date:
 
 
 def weekly_purchase_sales_amounts(
-    purchase_records: list[dict[str, Any]], sales_records: list[dict[str, Any]]
+    purchase_records: list[dict[str, Any]],
+    sales_records: list[dict[str, Any]],
+    inventory_records: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    grouped: dict[date, dict[str, Any]] = defaultdict(lambda: {"purchase_amount": 0, "sales_amount": 0})
+    sales_by_day: dict[date, int | float] = defaultdict(int)
+    cost_by_day: dict[date, int | float] = defaultdict(int)
+    quantity_by_day: dict[date, int | float] = defaultdict(int)
+    row_count_by_day: dict[date, int] = defaultdict(int)
+    date_values: list[date] = []
+    inventory_cost_by_product: dict[Any, float] = {}
+
+    for row in inventory_records:
+        product_id = row.get("product_id")
+        if product_id is None:
+            continue
+        inventory_cost_by_product[product_id] = float(row.get("average_cost") or 0)
+
     for row in purchase_records:
-        grouped[week_start(row["date"])]["purchase_amount"] += row.get("total_amount") or 0
+        date_values.append(date.fromisoformat(row["date"]))
     for row in sales_records:
-        grouped[week_start(row["date"])]["sales_amount"] += row.get("total_amount") or 0
+        row_date = date.fromisoformat(row["date"])
+        sales_by_day[row_date] += row.get("total_amount") or 0
+        cost_by_day[row_date] += (row.get("quantity") or 0) * inventory_cost_by_product.get(row.get("product_id"), 0)
+        quantity_by_day[row_date] += row.get("quantity") or 0
+        row_count_by_day[row_date] += 1
+        date_values.append(row_date)
+
+    if not date_values:
+        return []
+
+    grouped: dict[date, dict[str, Any]] = defaultdict(
+        lambda: {"row_count": 0, "quantity": 0, "sales_amount": 0, "cost_amount": 0}
+    )
+    current = min(date_values)
+    end_date = max(date_values)
+    while current <= end_date:
+        grouped[week_start(current.isoformat())]["row_count"] += row_count_by_day.get(current, 0)
+        grouped[week_start(current.isoformat())]["quantity"] += quantity_by_day.get(current, 0)
+        grouped[week_start(current.isoformat())]["sales_amount"] += sales_by_day.get(current, 0)
+        grouped[week_start(current.isoformat())]["cost_amount"] += cost_by_day.get(current, 0)
+        current += timedelta(days=1)
 
     result: list[dict[str, Any]] = []
     for start in sorted(grouped):
-        end = start + timedelta(days=6)
+        sales_amount = grouped[start]["sales_amount"]
+        cost_amount = int(round(grouped[start]["cost_amount"]))
+        margin_amount = sales_amount - cost_amount
         result.append(
             {
                 "week_start": start.isoformat(),
-                "week_end": end.isoformat(),
-                "label": f"{start.isoformat()} ~ {end.strftime('%m-%d')}",
-                "purchase_amount": grouped[start]["purchase_amount"],
-                "sales_amount": grouped[start]["sales_amount"],
+                "label": f"{start.month}/{start.day}",
+                "row_count": grouped[start]["row_count"],
+                "quantity": grouped[start]["quantity"],
+                "sales_amount": sales_amount,
+                "cost_amount": cost_amount,
+                "margin_amount": margin_amount,
+                "margin_rate": (margin_amount / sales_amount * 100) if sales_amount else None,
             }
         )
     return result
@@ -194,7 +233,7 @@ def render_weekly_chart(rows: list[dict[str, Any]]) -> str:
         purchase_y = top + plot_height - purchase_height
         sales_y = top + plot_height - sales_height
         label_x = group_x + group_width * 0.5
-        label = f"{row['week_start'][5:]}~{row['week_end'][5:]}"
+        label = row["week_start"]
 
         bars.append(
             f"""
@@ -253,7 +292,7 @@ def render_amount_balance_chart(
     if any(value < 0 for value in values):
         return """
           <div class="balance-chart-empty" role="note">
-            밸런스 블록 차트는 매입·매출·재고·나머지가 모두 0 이상일 때 표시한다.
+            밸런스 블록 차트는 매입·매출·재고·이익이 모두 0 이상일 때 표시한다.
           </div>
         """
 
@@ -284,8 +323,8 @@ def render_amount_balance_chart(
 
     inventory_y = baseline_y - inventory_height
     sales_y = inventory_y - sales_height
-    purchase_y = baseline_y - purchase_height
-    remainder_y = purchase_y - remainder_height
+    remainder_y = baseline_y - remainder_height
+    purchase_y = remainder_y - purchase_height
 
     def segment_label(x: float, y: float, segment_height: float, label: str, value: int | float) -> str:
         center_y = y + segment_height / 2
@@ -296,15 +335,15 @@ def render_amount_balance_chart(
 
     equation = (
         f"매출 {money(sales_amount)} + 재고 {money(inventory_amount)} = "
-        f"매입 {money(purchase_amount)} + 나머지 {money(remainder_amount)} = {money(total_amount)}원"
+        f"이익 {money(remainder_amount)} + 매입 {money(purchase_amount)} = {money(total_amount)}원"
     )
 
     return f"""
       <div class="chart-wrap balance-chart-wrap" aria-label="금액 대사 밸런스 블록 차트">
         <svg id="amount-balance-chart" viewBox="0 0 {chart_width} {chart_height}" role="img"
              aria-labelledby="amount-balance-title amount-balance-desc">
-          <title id="amount-balance-title">밸런스 블록 차트: 매출과 재고의 합계, 매입과 나머지의 합계</title>
-          <desc id="amount-balance-desc">왼쪽은 재고금액 위에 매출금액을, 오른쪽은 매입금액 위에 나머지를 쌓아 양쪽 합계가 같은지 보여준다.</desc>
+          <title id="amount-balance-title">밸런스 블록 차트: 매출과 재고의 합계, 이익과 매입의 합계</title>
+          <desc id="amount-balance-desc">왼쪽은 재고금액 위에 매출금액을, 오른쪽은 이익금액 위에 매입금액을 쌓아 양쪽 합계가 같은지 보여준다.</desc>
           <defs>
             <pattern id="balance-remainder-hatch" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(35)">
               <rect width="10" height="10" fill="#fff7e8"></rect>
@@ -313,7 +352,7 @@ def render_amount_balance_chart(
           </defs>
 
           <text class="balance-equation" x="480" y="36" text-anchor="middle">{escape(equation)}</text>
-          <text class="balance-note" x="480" y="64" text-anchor="middle">기초재고 0 가정 · 나머지 = 매출 + 현재재고금액 - 매입</text>
+          <text class="balance-note" x="480" y="64" text-anchor="middle">기초재고 0 가정 · 이익 = 매출 + 현재재고금액 - 매입</text>
 
           <line class="balance-equality-line" x1="{left_x}" y1="{plot_top}" x2="{right_x + block_width}" y2="{plot_top}"></line>
           <text class="balance-total-label" x="480" y="{plot_top - 14}" text-anchor="middle">양쪽 합계 {money(total_amount)}원</text>
@@ -323,17 +362,17 @@ def render_amount_balance_chart(
           {segment_label(left_x, inventory_y, inventory_height, '재고금액', inventory_amount)}
           {segment_label(left_x, sales_y, sales_height, '매출', sales_amount)}
 
-          <rect class="balance-block balance-purchase" x="{right_x}" y="{purchase_y:.1f}" width="{block_width}" height="{purchase_height:.1f}" rx="3"></rect>
           <rect class="balance-block balance-remainder" x="{right_x}" y="{remainder_y:.1f}" width="{block_width}" height="{remainder_height:.1f}" rx="3"></rect>
+          <rect class="balance-block balance-purchase" x="{right_x}" y="{purchase_y:.1f}" width="{block_width}" height="{purchase_height:.1f}" rx="3"></rect>
+          {segment_label(right_x, remainder_y, remainder_height, '이익', remainder_amount)}
           {segment_label(right_x, purchase_y, purchase_height, '매입', purchase_amount)}
-          {segment_label(right_x, remainder_y, remainder_height, '나머지', remainder_amount)}
 
           <line class="balance-baseline" x1="{left_x - 28}" y1="{baseline_y}" x2="{left_x + block_width + 28}" y2="{baseline_y}"></line>
           <line class="balance-baseline" x1="{right_x - 28}" y1="{baseline_y}" x2="{right_x + block_width + 28}" y2="{baseline_y}"></line>
           <text class="balance-side-title" x="{left_x + block_width / 2}" y="452" text-anchor="middle">매출 + 재고</text>
           <text class="balance-side-note" x="{left_x + block_width / 2}" y="478" text-anchor="middle">회수액과 남아 있는 자산</text>
-          <text class="balance-side-title" x="{right_x + block_width / 2}" y="452" text-anchor="middle">매입 + 나머지</text>
-          <text class="balance-side-note" x="{right_x + block_width / 2}" y="478" text-anchor="middle">투입액과 대사 차액</text>
+          <text class="balance-side-title" x="{right_x + block_width / 2}" y="452" text-anchor="middle">이익 + 매입</text>
+          <text class="balance-side-note" x="{right_x + block_width / 2}" y="478" text-anchor="middle">남는 금액과 투입액</text>
         </svg>
       </div>
     """
@@ -344,8 +383,12 @@ def render_weekly_table_rows(rows: list[dict[str, Any]]) -> str:
         f"""
           <tr>
             <th>{escape(row['label'])}</th>
-            <td class="money">{money(row['purchase_amount'])}</td>
+            <td class="money">{number(row['row_count'])}</td>
+            <td class="money">{number(row['quantity'])}</td>
             <td class="money">{money(row['sales_amount'])}</td>
+            <td class="money">{money(row['cost_amount'])}</td>
+            <td class="money">{money(row['margin_amount'])}</td>
+            <td class="money">{percent(row['margin_rate'])}</td>
           </tr>
         """
         for row in rows
@@ -506,7 +549,6 @@ def render_principal_margin_rows(rows: list[dict[str, Any]]) -> str:
             <td class="money">{money(row['cost_amount'])}</td>
             <td class="money">{money(row['margin_amount'])}</td>
             <td class="money">{percent(row['margin_rate'])}</td>
-            <td class="money">{number(row['missing_cost_row_count'])}</td>
           </tr>
         """
         for index, row in enumerate(rows, start=1)
@@ -621,7 +663,11 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         inventory_average,
         remainder_average,
     )
-    weekly_amounts = weekly_purchase_sales_amounts(sources["purchase"]["records"], sources["sales"]["records"])
+    weekly_amounts = weekly_purchase_sales_amounts(
+        sources["purchase"]["records"],
+        sources["sales"]["records"],
+        sources["inventory"]["records"],
+    )
     include_plotlyjs = include_plotlyjs_option(spec.get("plotly", {}).get("include_plotlyjs", "inline"))
     weekly_chart_spec = spec["charts"]["weekly_purchase_sales"]
     principal_chart_spec = spec["charts"]["principal_margin"]
@@ -640,8 +686,6 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         include_plotlyjs=False,
     )
     principal_table_rows = render_principal_margin_rows(principal_rows)
-    item_top_rows = render_item_top_rows(top_sales_by_item(sources["sales"]["records"]))
-
     summary_cards = "\n".join(
         [
             card("분석 기간", period),
@@ -654,10 +698,10 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     )
 
     amount_rows = [
-        ("매입금액", "기간 내 매입 상세 합계", money(purchase_amount)),
         ("매출금액", "기간 내 매출 상세 합계", money(sales_amount)),
         ("재고금액", "재고수량 x 평균원가", money(inventory_average)),
-        ("나머지", "매출금액 + 평균원가 기준 재고금액 - 매입금액", money(remainder_average)),
+        ("이익", "매출금액 + 평균원가 기준 재고금액 - 매입금액", money(remainder_average)),
+        ("매입금액", "기간 내 매입 상세 합계", money(purchase_amount)),
     ]
     amount_table = "\n".join(
         f"""
@@ -829,8 +873,9 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
       border-radius: 3px;
     }}
     .purchase-chip {{ background: #2f6f7e; }}
-    .sales-chip {{ background: #c47a23; }}
-    .cost-chip {{ background: #7b8794; }}
+    .outbound-chip {{ background: #c47a23; }}
+    .revenue-chip {{ background: #b54708; }}
+    .inventory-chip {{ background: #344054; }}
     .chart-wrap {{
       width: 100%;
       overflow-x: auto;
@@ -963,26 +1008,30 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
           {amount_table}
         </tbody>
       </table>
-      <p class="formula">나머지 = 매출금액 + 재고금액 - 매입금액. 재고금액은 평균원가 기준이다.</p>
+      <p class="formula">이익 = 매출금액 + 재고금액 - 매입금액. 재고금액은 평균원가 기준이다.</p>
     </section>
 
     <section aria-labelledby="weekly-title">
       <h2 id="weekly-title">{escape(weekly_chart_spec['title'])}</h2>
-      <p class="section-note">월요일 시작 주 단위로 매입금액과 매출금액을 합산했다.</p>
-      <p class="section-note">축: {escape(weekly_chart_spec.get('x_axis_title', '주간'))} / {escape(weekly_chart_spec.get('y_axis_title', '금액'))}</p>
+      <p class="section-note">월요일 시작 주 단위로 매출금액과 현재 평균원가 기준 매출원가를 합산했다.</p>
+      <p class="section-note">축: {escape(weekly_chart_spec.get('x_axis_title', '주 시작일'))} / {escape(weekly_chart_spec.get('y_axis_title', '금액'))}</p>
       <p class="section-note">표시 단위: {escape(weekly_chart_spec.get('unit_label', '원'))}</p>
       <div class="legend">
-        <span><i class="purchase-chip"></i>매입금액</span>
-        <span><i class="sales-chip"></i>매출금액</span>
+        <span><i class="revenue-chip"></i>{escape(weekly_chart_spec['series']['sales_amount']['label'])}</span>
+        <span><i class="outbound-chip"></i>{escape(weekly_chart_spec['series']['cost_amount']['label'])}</span>
       </div>
       {weekly_chart}
       <div class="table-scroll">
         <table>
           <thead>
             <tr>
-              <th>주간</th>
-              <th class="money">매입금액</th>
+              <th>주 시작일</th>
+              <th class="money">건수</th>
+              <th class="money">수량</th>
               <th class="money">매출금액</th>
+              <th class="money">매출원가</th>
+              <th class="money">마진금액</th>
+              <th class="money">마진율</th>
             </tr>
           </thead>
           <tbody>
@@ -994,12 +1043,12 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
 
     <section aria-labelledby="principal-title">
       <h2 id="principal-title">{escape(principal_chart_spec['title'])}</h2>
-      <p class="section-note">매출 전표의 원청 메타데이터를 기준으로 묶었다. 매출원가는 기간 내 매입을 `product_id`별 가중평균 단가로 환산한 추정값이다.</p>
+      <p class="section-note">매출 전표의 원청 메타데이터를 기준으로 묶었다. 매출원가는 기간 내 매입을 제품별 단가 기준으로 환산한 추정값이다.</p>
       <p class="section-note">축: {escape(principal_chart_spec.get('y_axis_title', '원청'))} / {escape(principal_chart_spec.get('x_axis_title', '금액'))}</p>
       <p class="section-note">표시 단위: {escape(principal_chart_spec.get('unit_label', '원'))}</p>
       <div class="legend">
-        <span><i class="purchase-chip"></i>매출금액</span>
-        <span><i class="cost-chip"></i>매출원가</span>
+        <span><i class="revenue-chip"></i>매출금액</span>
+        <span><i class="outbound-chip"></i>매출원가</span>
       </div>
       {principal_chart}
       <div class="table-scroll">
@@ -1014,7 +1063,6 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
               <th class="money">매출원가</th>
               <th class="money">마진금액</th>
               <th class="money">마진율</th>
-              <th class="money">원가 미확인 행수</th>
             </tr>
           </thead>
           <tbody>
@@ -1022,25 +1070,6 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
           </tbody>
         </table>
       </div>
-    </section>
-
-    <section aria-labelledby="item-top-title">
-      <h2 id="item-top-title">매출 품목별 TOP</h2>
-      <table>
-        <thead>
-          <tr>
-            <th class="rank">순위</th>
-            <th class="money">등록번호</th>
-            <th>품명</th>
-            <th class="money">건수</th>
-            <th class="money">수량</th>
-            <th class="money">매출금액</th>
-          </tr>
-        </thead>
-        <tbody>
-          {item_top_rows}
-        </tbody>
-      </table>
     </section>
   </main>
 </body>
