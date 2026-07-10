@@ -89,14 +89,16 @@ def period_label(purchase_meta: dict[str, Any], sales_meta: dict[str, Any]) -> s
     return f"{min(starts)} ~ {max(ends)}"
 
 
-def card(title: str, value: str, note: str = "") -> str:
+def summary_row(title: str, value: str, note: str = "") -> str:
     note_html = f"<p>{escape(note)}</p>" if note else ""
     return f"""
-      <article class="card">
-        <span>{escape(title)}</span>
-        <strong>{escape(value)}</strong>
-        {note_html}
-      </article>
+      <div class="summary-row">
+        <dt>{escape(title)}</dt>
+        <dd>
+          <strong>{escape(value)}</strong>
+          {note_html}
+        </dd>
+      </div>
     """
 
 
@@ -304,13 +306,13 @@ def render_amount_balance_chart(
           </div>
         """
 
-    chart_width = 900
-    chart_height = 470
-    plot_top = 104
-    plot_height = 254
+    chart_width = 980
+    chart_height = 410
+    plot_top = 74
+    plot_height = 238
     baseline_y = plot_top + plot_height
-    left_x = 170
-    right_x = 570
+    left_x = 190
+    right_x = 630
     block_width = 160
 
     def height(value: int | float) -> float:
@@ -333,11 +335,6 @@ def render_amount_balance_chart(
           <text class="balance-segment-value" x="{x + block_width / 2:.1f}" y="{center_y + 15:.1f}" text-anchor="middle">{money(value)}원</text>
         """
 
-    equation = (
-        f"매출 {money(sales_amount)} + 재고 {money(inventory_amount)} = "
-        f"이익 {money(remainder_amount)} + 매입 {money(purchase_amount)} = {money(total_amount)}원"
-    )
-
     return f"""
       <div class="chart-wrap balance-chart-wrap" aria-label="금액 대사 밸런스 블록 차트">
         <svg id="amount-balance-chart" viewBox="0 0 {chart_width} {chart_height}" role="img"
@@ -351,11 +348,8 @@ def render_amount_balance_chart(
             </pattern>
           </defs>
 
-          <text class="balance-equation" x="450" y="34" text-anchor="middle">{escape(equation)}</text>
-          <text class="balance-note" x="450" y="60" text-anchor="middle">기초재고 0 가정 · 이익 = 매출 + 현재재고금액 - 매입</text>
-
           <line class="balance-equality-line" x1="{left_x}" y1="{plot_top}" x2="{right_x + block_width}" y2="{plot_top}"></line>
-          <text class="balance-total-label" x="450" y="{plot_top - 14}" text-anchor="middle">양쪽 합계 {money(total_amount)}원</text>
+          <text class="balance-total-label" x="{chart_width / 2:.1f}" y="{plot_top - 18}" text-anchor="middle">양쪽 합계 {money(total_amount)}원</text>
 
           <rect class="balance-block balance-inventory" x="{left_x}" y="{inventory_y:.1f}" width="{block_width}" height="{inventory_height:.1f}" rx="3"></rect>
           <rect class="balance-block balance-sales" x="{left_x}" y="{sales_y:.1f}" width="{block_width}" height="{sales_height:.1f}" rx="3"></rect>
@@ -369,10 +363,10 @@ def render_amount_balance_chart(
 
           <line class="balance-baseline" x1="{left_x - 28}" y1="{baseline_y}" x2="{left_x + block_width + 28}" y2="{baseline_y}"></line>
           <line class="balance-baseline" x1="{right_x - 28}" y1="{baseline_y}" x2="{right_x + block_width + 28}" y2="{baseline_y}"></line>
-          <text class="balance-side-title" x="{left_x + block_width / 2}" y="408" text-anchor="middle">매출 + 재고</text>
-          <text class="balance-side-note" x="{left_x + block_width / 2}" y="432" text-anchor="middle">회수액과 남아 있는 자산</text>
-          <text class="balance-side-title" x="{right_x + block_width / 2}" y="408" text-anchor="middle">이익 + 매입</text>
-          <text class="balance-side-note" x="{right_x + block_width / 2}" y="432" text-anchor="middle">남는 금액과 투입액</text>
+          <text class="balance-side-title" x="{left_x + block_width / 2}" y="356" text-anchor="middle">매출 + 재고</text>
+          <text class="balance-side-note" x="{left_x + block_width / 2}" y="378" text-anchor="middle">회수액과 남아 있는 자산</text>
+          <text class="balance-side-title" x="{right_x + block_width / 2}" y="356" text-anchor="middle">이익 + 매입</text>
+          <text class="balance-side-note" x="{right_x + block_width / 2}" y="378" text-anchor="middle">남는 금액과 투입액</text>
         </svg>
       </div>
     """
@@ -544,7 +538,6 @@ def render_principal_margin_rows(rows: list[dict[str, Any]]) -> str:
             <td class="rank">{index}</td>
             <th>{escape(row['principal'])}</th>
             <td class="money">{number(row['row_count'])}</td>
-            <td class="money">{number(row['quantity'])}</td>
             <td class="money">{money(row['sales_amount'])}</td>
             <td class="money">{money(row['cost_amount'])}</td>
             <td class="money">{money(row['margin_amount'])}</td>
@@ -686,10 +679,10 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         include_plotlyjs=False,
     )
     principal_table_rows = render_principal_margin_rows(principal_rows)
-    summary_cards = "\n".join(
+    summary_rows_html = "\n".join(
         [
-            card("분석 기간", period),
-            card(
+            summary_row("분석 기간", period),
+            summary_row(
                 "거래 건수",
                 f"매입 상세 {number(purchase_meta['record_count'])}건 / 매출 상세 {number(sales_meta['record_count'])}건",
                 f"재고 품목 {number(inventory_meta['unique_product_ids'])}개",
@@ -700,8 +693,8 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     amount_rows = [
         ("매출금액", "기간 내 매출 상세 합계", money(sales_amount)),
         ("재고금액", "재고수량 x 평균원가", money(inventory_average)),
-        ("이익", "매출금액 + 평균원가 기준 재고금액 - 매입금액", money(remainder_average)),
         ("매입금액", "기간 내 매입 상세 합계", money(purchase_amount)),
+        ("이익", "매출금액 + 평균원가 기준 재고금액 - 매입금액", money(remainder_average)),
     ]
     amount_table = "\n".join(
         f"""
@@ -812,32 +805,37 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     .report-page--analysis .page-panel {{
       flex: 1;
     }}
-    .cards {{
+    .summary-list {{
+      margin: 0;
+      padding: 0;
+      border-top: 1px solid var(--line);
+    }}
+    .summary-row {{
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 14px;
+      grid-template-columns: 148px minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--line);
     }}
-    .card {{
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 18px;
-      background: #ffffff;
-      min-height: 132px;
-    }}
-    .card span {{
-      display: block;
+    .summary-row dt {{
+      margin: 0;
       color: var(--muted);
       font-size: 14px;
-      margin-bottom: 10px;
+      font-weight: 700;
     }}
-    .card strong {{
+    .summary-row dd {{
+      margin: 0;
+      min-width: 0;
+    }}
+    .summary-row strong {{
       display: block;
-      font-size: 26px;
-      line-height: 1.25;
+      font-size: 24px;
+      line-height: 1.28;
       letter-spacing: 0;
     }}
-    .card p {{
-      margin: 10px 0 0;
+    .summary-row p {{
+      margin: 6px 0 0;
       color: var(--muted);
       font-size: 14px;
     }}
@@ -947,15 +945,9 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     .balance-sales {{ fill: #f7d8b5; }}
     .balance-purchase {{ fill: #8fc2cc; }}
     .balance-remainder {{ fill: url(#balance-remainder-hatch); }}
-    .balance-equation {{
-      fill: var(--text);
-      font-size: 18px;
-      font-weight: 700;
-      font-variant-numeric: tabular-nums;
-    }}
     .balance-note, .balance-side-note {{
       fill: var(--muted);
-      font-size: 13px;
+      font-size: 12px;
     }}
     .balance-equality-line {{
       stroke: var(--accent);
@@ -964,7 +956,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     }}
     .balance-total-label {{
       fill: var(--accent);
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 700;
     }}
     .balance-baseline {{
@@ -973,18 +965,18 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     }}
     .balance-segment-label {{
       fill: #1f2933;
-      font-size: 15px;
+      font-size: 13px;
       font-weight: 700;
     }}
     .balance-segment-value {{
       fill: #344054;
-      font-size: 13px;
+      font-size: 11.5px;
       font-weight: 700;
       font-variant-numeric: tabular-nums;
     }}
     .balance-side-title {{
       fill: var(--text);
-      font-size: 16px;
+      font-size: 14px;
       font-weight: 700;
     }}
     .balance-chart-empty {{
@@ -1038,9 +1030,9 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
 
       <section class="page-panel" aria-labelledby="summary-title">
         <h2 id="summary-title">요약</h2>
-        <div class="cards">
-          {summary_cards}
-        </div>
+        <dl class="summary-list">
+          {summary_rows_html}
+        </dl>
       </section>
 
       <section class="page-panel" aria-labelledby="amount-title">
@@ -1114,7 +1106,6 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
                 <th class="rank">순위</th>
                 <th>원청</th>
                 <th class="money">건수</th>
-                <th class="money">수량</th>
                 <th class="money">매출금액</th>
                 <th class="money">매출원가</th>
                 <th class="money">마진금액</th>

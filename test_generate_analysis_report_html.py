@@ -22,6 +22,8 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
     def test_renders_summary_average_cost_reconciliation_and_sales_tops(self) -> None:
         sources = load_sources(EXAMPLE_DIR)
         html = render_report_html(sources)
+        principal_section = html.split('id="principal-title"', 1)[1]
+        amount_table_html = html.split('<table class="amount-table">', 1)[1].split("</table>", 1)[0]
 
         self.assertIn("<title>매입/매출 재고 분석 보고서</title>", html)
         self.assertIn("요약", html)
@@ -51,6 +53,8 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertIn("매입 상세 4건", html)
         self.assertIn("매출 상세 4건", html)
         self.assertIn("재고 품목 4개", html)
+        self.assertIn('class="summary-list"', html)
+        self.assertNotIn('class="cards"', html)
         self.assertNotIn("재고 검증", html)
         self.assertNotIn("보류 항목", html)
         self.assertNotIn("계산 음수재고 2건", html)
@@ -75,6 +79,8 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertNotIn("원가 미확인 행수", html)
         self.assertNotIn("매출 품목별 TOP", html)
         self.assertIn("제품별 단가", html)
+        self.assertNotIn("<th class=\"money\">수량</th>", principal_section)
+        self.assertLess(amount_table_html.index("매입금액"), amount_table_html.index("이익"))
 
         self.assertNotIn("품목별 분석", html)
         self.assertNotIn("전표별 매출 요약", html)
