@@ -11,6 +11,7 @@ from generate_analysis_report_html import (
     load_sources,
     principal_sales_cost_rows,
     render_report_html,
+    weekly_inventory_flow_rows,
 )
 from generate_analysis_report_html_core import weekly_purchase_sales_amounts
 from analyze_inventory import build_reconciliation
@@ -131,7 +132,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
             "부가세 정산",
             "매출 공급가액",
             "매입 부가세",
-            "잠정 부가세 정산금",
+            "잠정 부가세 납부 예상액",
             "현금 관점의 참고값",
             "validation_error",
             "잠정 매출총이익",
@@ -140,7 +141,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         vat_start = html.index('class="report-page report-page--vat"')
         vat_end = html.index("</article>", vat_start)
         self.assertIn('id="vat-settlement-title"', html[vat_start:vat_end])
-        self.assertNotIn("부가세 납부 예상액", html[vat_start:vat_end])
+        self.assertIn("잠정 부가세 납부 예상액", html[vat_start:vat_end])
 
     def test_demo_amounts_preserve_component_mismatch_and_fifo_unconfirmed_state(self):
         sources = load_sources(EXAMPLE_DIR)
@@ -169,7 +170,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertIn("금액 구성 검증 상태", html)
         self.assertIn("component_mismatch", html)
         self.assertIn("매출 부가세</th><td class=\"money\">160", html)
-        self.assertIn("잠정 부가세 정산금</th><td class=\"money\">106", html)
+        self.assertIn("잠정 부가세 납부 예상액</th><td class=\"money\">106", html)
 
     def test_weekly_and_principal_margin_statuses_hide_non_final_rates(self):
         purchase_rows = [
@@ -202,6 +203,109 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         html = render_report_html(sources)
         self.assertIn("거래 단위 오류 상세", html)
         self.assertNotIn("2026/05/12-99", html)
+
+    def test_invalid_sales_quantity_renders_and_is_excluded_from_quantity_totals(self):
+        sources = deepcopy(load_sources(EXAMPLE_DIR))
+        baseline_weekly = weekly_purchase_sales_amounts(
+            sources["purchase"]["records"], sources["sales"]["records"], [], sources["reconciliation"]
+        )
+        baseline_principal = principal_sales_cost_rows(
+            sources["sales"]["records"], sources["purchase"]["records"], sources["sales_voucher_metadata"], sources["reconciliation"]
+        )
+        sources["sales"]["records"].append(
+            {
+                "date": "2026-05-12", "voucher": 999, "excel_row": 999,
+                "quantity": "not-a-number", "supply_amount": 777, "vat": 0,
+                "total_amount": 777, "product_id": 1001, "item_name": "Bad Quantity", "specification": "Test",
+            }
+        )
+        sources["reconciliation"] = build_reconciliation(
+            sources["purchase"], sources["sales"], sources["inventory"], "2026-05-10", "2026-05-20", "2026-05-25"
+        )
+
+        html = render_report_html(sources)
+        weekly = weekly_purchase_sales_amounts(
+            sources["purchase"]["records"], sources["sales"]["records"], [], sources["reconciliation"]
+        )
+        principal = principal_sales_cost_rows(
+            sources["sales"]["records"], sources["purchase"]["records"], sources["sales_voucher_metadata"], sources["reconciliation"]
+        )
+
+        self.assertIn("거래 단위 오류 상세", html)
+        self.assertEqual(sum(row["quantity"] for row in weekly), sum(row["quantity"] for row in baseline_weekly))
+        self.assertEqual(sum(row["quantity"] for row in principal), sum(row["quantity"] for row in baseline_principal))
+        self.assertEqual(sum(row["quantity"] for row in weekly), sources["reconciliation"]["summary"]["period_sales_quantity"])
+
+    def test_valid_supply_amount_survives_fifo_and_quantity_errors_in_all_revenue_views(self):
+        sales = [
+            {"date": "2026-01-10", "voucher": 1, "excel_row": 1, "quantity": 2, "supply_amount": 100, "vat": 0, "total_amount": 100, "product_id": None},
+            {"date": "2026-01-11", "voucher": 2, "excel_row": 2, "quantity": "not-a-number", "supply_amount": 200, "vat": 0, "total_amount": 200, "product_id": 1},
+        ]
+        reconciliation = build_reconciliation({"records": []}, {"records": sales}, {"records": []}, "2026-01-01", "2026-01-31", "2026-01-31")
+        weekly = weekly_purchase_sales_amounts([], sales, [], reconciliation)
+        principal = principal_sales_cost_rows(sales, [], {"records": []}, reconciliation)
+        flow = weekly_inventory_flow_rows([], sales, [], reconciliation)
+
+        self.assertEqual(reconciliation["summary"]["period_sales_supply_amount"], 300)
+        self.assertEqual(sum(row["sales_amount"] for row in weekly), 300)
+        self.assertEqual(sum(row["sales_amount"] for row in principal), 300)
+        self.assertEqual(sum(row["sales_amount"] for row in flow), 300)
+        self.assertEqual(sum(row["quantity"] for row in weekly), 0)
+        self.assertEqual(sum(row["quantity"] for row in principal), 0)
+
+    def test_missing_empty_and_invalid_quantity_are_not_reported_as_zero_quantity_rows(self):
+        sales = [
+            {"date": "2026-01-10", "voucher": 1, "excel_row": 1, "quantity": None, "supply_amount": 10, "vat": 0, "total_amount": 10, "product_id": 1},
+            {"date": "2026-01-10", "voucher": 2, "excel_row": 2, "quantity": "", "supply_amount": 10, "vat": 0, "total_amount": 10, "product_id": 1},
+            {"date": "2026-01-10", "voucher": 3, "excel_row": 3, "quantity": "not-a-number", "supply_amount": 10, "vat": 0, "total_amount": 10, "product_id": 1},
+        ]
+        reconciliation = build_reconciliation({"records": []}, {"records": sales}, {"records": []}, "2026-01-01", "2026-01-31", "2026-01-31")
+        weekly = weekly_purchase_sales_amounts([], sales, [], reconciliation)
+        principal = principal_sales_cost_rows(sales, [], {"records": []}, reconciliation)
+
+        self.assertEqual(reconciliation["summary"]["quantity_validation_error_count"], 3)
+        self.assertTrue(all(not state["quantity_eligible"] for state in reconciliation["transaction_validations"]))
+        self.assertEqual(sum(row["quantity"] for row in weekly), 0)
+        self.assertEqual(sum(row["quantity"] for row in principal), 0)
+        self.assertEqual(sum(row["sales_amount"] for row in weekly), 30)
+
+    def test_vat_validation_error_keeps_refund_and_payable_direction(self):
+        for settlement, label in ((-10, "잠정 부가세 환급 예상액"), (10, "잠정 부가세 납부 예상액")):
+            with self.subTest(settlement=settlement):
+                sources = deepcopy(load_sources(EXAMPLE_DIR))
+                sources["reconciliation"]["summary"].update(
+                    vat_settlement_amount=settlement,
+                    vat_settlement_status="validation_error",
+                    post_vat_reference_status="error",
+                )
+                html = render_report_html(sources)
+                vat_start = html.index('class="report-page report-page--vat"')
+                vat_end = html.index("</article>", vat_start)
+                vat_section = html[vat_start:vat_end]
+
+                self.assertIn(f"{label}</th><td class=\"money\">10", vat_section)
+                self.assertIn("검증 필요", vat_section)
+
+    def test_invalid_supply_amount_never_uses_total_as_revenue_fallback(self):
+        sales = [
+            {"date": "2026-01-10", "voucher": 1, "excel_row": 1, "quantity": 1, "supply_amount": None, "vat": 10, "total_amount": 110, "product_id": 1},
+        ]
+        reconciliation = build_reconciliation({"records": []}, {"records": sales}, {"records": []}, "2026-01-01", "2026-01-31", "2026-01-31")
+        weekly = weekly_purchase_sales_amounts([], sales, [], reconciliation)
+        principal = principal_sales_cost_rows(sales, [], {"records": []}, reconciliation)
+        flow = weekly_inventory_flow_rows([], sales, [], reconciliation)
+        legacy_reconciliation = {"metadata": {"period_start": "2026-01-01", "period_end": "2026-01-31"}}
+        legacy_weekly = weekly_purchase_sales_amounts([], sales, [], legacy_reconciliation)
+        legacy_principal = principal_sales_cost_rows(sales, [], {"records": []}, legacy_reconciliation)
+        legacy_flow = weekly_inventory_flow_rows([], sales, [], legacy_reconciliation)
+
+        self.assertEqual(reconciliation["summary"]["period_sales_supply_amount"], 0)
+        self.assertEqual(sum(row["sales_amount"] for row in weekly), 0)
+        self.assertEqual(sum(row["sales_amount"] for row in principal), 0)
+        self.assertEqual(sum(row["sales_amount"] for row in flow), 0)
+        self.assertEqual(sum(row["sales_amount"] for row in legacy_weekly), 0)
+        self.assertEqual(sum(row["sales_amount"] for row in legacy_principal), 0)
+        self.assertEqual(sum(row["sales_amount"] for row in legacy_flow), 0)
 
 
 if __name__ == "__main__":

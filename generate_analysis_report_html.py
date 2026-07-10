@@ -124,15 +124,19 @@ def weekly_inventory_flow_rows(
     def day(value: Any) -> dict[str, Decimal]:
         return daily.setdefault(value, {"purchase": Decimal("0"), "sales": Decimal("0"), "outbound": Decimal("0"), "inventory_delta": Decimal("0")})
 
-    error_keys = {
-        _base.error_key(error) for error in (reconciliation or {}).get("errors", [])
-        if error.get("source") == "sales" and valid_period_date(error)
-        and (error.get("affects_revenue") or error.get("affects_fifo_cost"))
+    validation_states = (reconciliation or {}).get("transaction_validations", [])
+    valid_supply_keys = {
+        _base.error_key(state)
+        for state in validation_states
+        if state.get("source") == "sales" and state.get("supply_amount_valid")
+        and valid_period_date(state)
     }
     for row in sales_records:
         value = valid_period_date(row)
         amount = _base.decimal_amount(row.get("supply_amount"))
-        if value and amount is not None and _base.error_key(row, "sales") not in error_keys:
+        # Revenue is its own stream: FIFO or quantity errors are reported in
+        # their own statuses and must not discard a valid supply amount.
+        if value and amount is not None and (not validation_states or _base.error_key(row, "sales") in valid_supply_keys):
             day(value)["sales"] += amount
 
     inventory_events = (reconciliation or {}).get("inventory_cost_events", [])
@@ -323,7 +327,8 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     gross_profit_label = "매출총이익" if reconciliation.get("gross_profit_status") == "confirmed" else "잠정 매출총이익"
     vat_settlement = reconciliation.get("vat_settlement_amount", 0)
     vat_error = reconciliation.get("vat_settlement_status") == "validation_error"
-    vat_label = "잠정 부가세 정산금" if vat_error else ("부가세 납부 예상액" if vat_settlement > 0 else ("부가세 환급 예상액" if vat_settlement < 0 else "부가세 정산금"))
+    vat_direction_label = "납부 예상액" if vat_settlement > 0 else ("환급 예상액" if vat_settlement < 0 else "정산금")
+    vat_label = f"{'잠정 ' if vat_error else ''}부가세 {vat_direction_label}"
     status_rows = "".join(
         f"<li><code>{escape(status)}</code>: {_base.number(count)}개 품목</li>"
         for status, count in reconciliation.get("cost_status_counts", {}).items()
