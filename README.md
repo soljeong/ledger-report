@@ -46,6 +46,20 @@ python -m venv .venv
 
 `report_spec.yaml`에서 보고서 제목, Plotly 포함 방식, 차트 제목, 축 이름, 표시 단위를 조정합니다. 기본값은 Plotly JS를 HTML에 inline 포함해서 오프라인으로 열 수 있게 합니다.
 
+## 수량 대사·기초재고 계약
+
+장부금액, 장부수량, FIFO 원가는 서로 독립된 스트림입니다. 날짜·`product_id`·숫자 수량이 모두 유효한 거래만 장부수량과 FIFO에 쓰고, FIFO 매입 원가에는 추가로 숫자 `unit_price`가 필요합니다. 따라서 단가가 빠진 매입은 장부수량에는 남지만 FIFO 원가층에는 들어가지 않습니다.
+
+재고 시트의 각 행은 `inventory_validations`에 `product_id_valid`, `stock_quantity_valid`, `inventory_reconciliation_eligible`, `inventory_validation_status`로 공개됩니다. `stock_quantity`가 누락되거나 비수치이면 원본값과 오류를 보존하고 0으로 바꾸지 않습니다. 정상 재고 행만 합산하되, 같은 품목에 오류 행이 하나라도 있으면 해당 품목의 수량 대사는 `validation_error`입니다.
+
+- `quantity_difference_count`와 `quantity_reconciliation_mismatch_count`: 비교 가능한 장부·재고 수량의 실제 차이만 센다(`inventory_more`, `ledger_more`, `inventory_negative_stock`). `ledger_only`, `inventory_only`, `validation_error`는 제외한다.
+- `quantity_validation_error_count`: 날짜, `product_id`, 수량 때문에 장부수량 스트림에 들어가지 못한 거래 행 수다. 기준일 이후 행도 입력 검증 건수에는 남지만 현재 기준일 대사에는 영향을 주지 않는다.
+- `global_quantity_validation_error_count`: 기준일 대사에 영향을 주지만 품목에 귀속할 수 없는 거래 오류 행 수다. 날짜를 판정할 수 없고 `product_id`도 없는 행도 여기에 포함한다.
+- `inventory_snapshot_validation_error_count`: 유효하지 않은 재고 스냅샷 행 수다. 한 행에 `product_id`와 `stock_quantity` 오류가 함께 있어도 이 건수는 한 번만 센다.
+- `quantity_reconciliation_validation_error_count`: 현재 대사의 검증 오류 위치 수다. 품목별 `validation_error`는 품목당 한 번, 전역 거래·재고 스냅샷 오류는 행당 한 번 센다. 위 세 입력 오류 건수와 중복될 수 있으므로 합계로 사용하지 않는다. 전체 상태는 `quantity_reconciliation_validation_status`의 `valid` 또는 `validation_error`다.
+
+기초 장부수량은 `opening_stock_quantity`(=`opening_signed_stock_quantity`)이며, 이는 시작일 전 매입수량에서 매출수량을 뺀 값입니다. `opening_normal_stock_quantity`과 `opening_negative_stock_quantity`는 그 부호를 분리한 값이고, `opening_costed_layer_quantity`과 `opening_stock_amount`는 단가까지 확인된 FIFO 원가층만 나타냅니다.
+
 ## Private Workflow
 
 ```bash

@@ -107,19 +107,26 @@ class WorkbookParseTests(unittest.TestCase):
                     ["품명", "규격", "등록번호", "재고합계", "평균원가", "최종매입가"],
                     ["Motor Driver IC", "QFN-48", 1001, 60, 5500, 5500],
                     ["Sensor Board", "I2C Module", 1002, None, 3300, 3300],
+                    ["Malformed Stock", "Text", 1003, "not-a-number", 1, 1],
                 ],
             )
 
             output_name, payload = parse_workbook(path)
 
         self.assertEqual(output_name, "inventory.json")
-        self.assertEqual(payload["metadata"]["record_count"], 2)
-        self.assertEqual(payload["metadata"]["unique_product_ids"], 2)
+        self.assertEqual(payload["metadata"]["record_count"], 3)
+        self.assertEqual(payload["metadata"]["unique_product_ids"], 3)
         self.assertEqual(payload["metadata"]["detail_totals"]["stock_quantity"], 60)
         self.assertEqual(payload["metadata"]["detail_totals"]["stock_amount_at_average_cost"], 330000)
         self.assertEqual(payload["metadata"]["blank_stock_quantity_row_count"], 1)
         blank_row = next(row for row in payload["records"] if row["product_id"] == 1002)
-        self.assertEqual(blank_row["stock_quantity"], 0)
+        self.assertIsNone(blank_row["stock_quantity"])
+        malformed_row = next(row for row in payload["records"] if row["product_id"] == 1003)
+        self.assertEqual(malformed_row["stock_quantity"], "not-a-number")
+        self.assertEqual(
+            payload["metadata"]["invalid_stock_quantity_rows"],
+            [{"excel_row": 4, "stock_quantity": "not-a-number"}],
+        )
 
 
 if __name__ == "__main__":

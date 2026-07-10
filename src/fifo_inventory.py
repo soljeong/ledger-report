@@ -528,31 +528,30 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
                 kind, row, "invalid_record", reason=str(exc),
                 affects={"affects_quantity": True, "affects_fifo_cost": True, "affects_revenue": False, "affects_vat": True, "affects_inventory_reconciliation": True},
             ))
-            transaction_validations.append(amount_state)
-            continue
-        amount_state["date_valid"] = True
-        # A date-valid transaction is available to the amount stream even if
-        # it is unusable for FIFO (for example, it has no product_id).
-        amount_records.append((row, kind))
-        dated_records.append((row, kind))
-        amount_state["quantity_eligible"] = bool(
-            amount_state["product_id_valid"] and amount_state["quantity_valid"]
-        )
-        amount_state["fifo_cost_eligible"] = bool(
-            amount_state["quantity_eligible"]
-            and (kind != "purchase" or amount_state["unit_price_valid"])
-        )
-        amount_state["fifo_eligible"] = amount_state["fifo_cost_eligible"]
+            date_valid = False
+        else:
+            date_valid = True
+            amount_state["date_valid"] = True
+            # A date-valid transaction is available to the amount stream even
+            # if it is unusable for FIFO (for example, it has no product_id).
+            amount_records.append((row, kind))
+            dated_records.append((row, kind))
 
-        if not amount_state["product_id_valid"]:
+        # Register a known product before testing the date.  An unparseable
+        # date cannot contribute a quantity, but it *can* invalidate that
+        # product's stock-date reconciliation.
+        if amount_state["product_id_valid"]:
+            product_ids.add(product_id)
+            ledger_ids.add(product_id)
+            if row.get("item_name"):
+                names[product_id].add(str(row["item_name"]))
+            if row.get("specification"):
+                specs[product_id].add(str(row["specification"]))
+        else:
             errors.append(_record_error(
-                kind, row, "missing_product_id", reason="record excluded from product-level FIFO and quantity calculations",
+                kind, row, "missing_product_id", reason="record excluded from product-level FIFO and quantity calculations", quantity=row.get("quantity"),
                 affects={"affects_quantity": True, "affects_fifo_cost": True, "affects_revenue": False, "affects_vat": False, "affects_inventory_reconciliation": True},
             ))
-        else:
-            product_ids.add(product_id); ledger_ids.add(product_id)
-            if row.get("item_name"): names[product_id].add(str(row["item_name"]))
-            if row.get("specification"): specs[product_id].add(str(row["specification"]))
 
         if not amount_state["quantity_valid"]:
             errors.append(_record_error(
@@ -565,18 +564,86 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
                 affects={"affects_quantity": False, "affects_fifo_cost": True, "affects_revenue": False, "affects_vat": False, "affects_inventory_reconciliation": False},
             ))
 
+        amount_state["quantity_eligible"] = bool(
+            date_valid and amount_state["product_id_valid"] and amount_state["quantity_valid"]
+        )
+        amount_state["fifo_cost_eligible"] = bool(
+            amount_state["quantity_eligible"]
+            and (kind != "purchase" or amount_state["unit_price_valid"])
+        )
+        amount_state["fifo_eligible"] = amount_state["fifo_cost_eligible"]
         if amount_state["quantity_eligible"]:
             quantity_events.append((row, kind))
         if amount_state["fifo_cost_eligible"]:
             events.append((row, kind))
         transaction_validations.append(amount_state)
+
+    # Inventory snapshots are a fourth input eligibility stream.  Their
+    # quantity is never a FIFO cost input, and an unusable snapshot quantity
+    # must neither abort the run nor become a silent zero.
+    inventory_validations: list[dict[str, Any]] = []
+    valid_inventory_records: list[dict[str, Any]] = []
+    inventory_validation_error_products: set[Any] = set()
+    inventory_validation_statuses_by_product: dict[Any, set[str]] = defaultdict(set)
+    global_inventory_snapshot_validation_error_count = 0
+    inventory_snapshot_validation_error_count = 0
     for row in inventory:
         product_id = row.get("product_id")
-        if product_id in (None, ""):
-            errors.append(_record_error("inventory", row, "missing_product_id", reason="inventory row excluded from reconciliation")); continue
-        product_ids.add(product_id)
-        if row.get("item_name"): names[product_id].add(str(row["item_name"]))
-        if row.get("specification"): specs[product_id].add(str(row["specification"]))
+        raw_quantity = row.get("stock_quantity")
+        product_id_valid = product_id not in (None, "")
+        stock_quantity_valid = _is_numeric(raw_quantity)
+        if not product_id_valid:
+            status = "missing_product_id"
+        elif raw_quantity in (None, ""):
+            status = "missing_stock_quantity"
+        elif not stock_quantity_valid:
+            status = "invalid_stock_quantity"
+        else:
+            status = "valid"
+        state = {
+            "source": "inventory",
+            "product_id": product_id,
+            "excel_row": row.get("excel_row"),
+            "item_name": row.get("item_name"),
+            "specification": row.get("specification"),
+            "stock_quantity": raw_quantity,
+            "product_id_valid": product_id_valid,
+            "stock_quantity_valid": stock_quantity_valid,
+            "inventory_reconciliation_eligible": bool(product_id_valid and stock_quantity_valid),
+            "inventory_validation_status": status,
+        }
+        inventory_validations.append(state)
+        if status != "valid":
+            # Counts are one per source row, even if both product_id and
+            # stock_quantity are bad.  Field-specific errors remain in the
+            # error detail so callers do not lose either cause.
+            inventory_snapshot_validation_error_count += 1
+        if not product_id_valid:
+            global_inventory_snapshot_validation_error_count += 1
+            errors.append(_record_error(
+                "inventory", row, "missing_inventory_product_id",
+                reason="inventory row cannot be assigned to a product for reconciliation",
+                affects={"affects_quantity": False, "affects_fifo_cost": False, "affects_revenue": False, "affects_vat": False, "affects_inventory_reconciliation": True},
+            ))
+        else:
+            product_ids.add(product_id)
+            if row.get("item_name"):
+                names[product_id].add(str(row["item_name"]))
+            if row.get("specification"):
+                specs[product_id].add(str(row["specification"]))
+            if not stock_quantity_valid:
+                inventory_validation_error_products.add(product_id)
+                inventory_validation_statuses_by_product[product_id].add(status)
+        if not stock_quantity_valid:
+            errors.append(_record_error(
+                "inventory", row,
+                "missing_stock_quantity" if raw_quantity in (None, "") else "invalid_stock_quantity",
+                reason="stock_quantity is required and must be numeric",
+                stock_quantity=raw_quantity,
+                affects={"affects_quantity": False, "affects_fifo_cost": False, "affects_revenue": False, "affects_vat": False, "affects_inventory_reconciliation": True},
+            ))
+        if state["inventory_reconciliation_eligible"]:
+            valid_inventory_records.append(row)
     events.sort(key=lambda pair: event_sort_key(*pair))
     quantity_events.sort(key=lambda pair: event_sort_key(*pair))
     def has_valid_component(row: dict[str, Any], kind: str, component: str) -> bool:
@@ -605,8 +672,8 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
     for row, kind in quantity_events:
         if iso_date(row["date"]) <= stock_date: inventory_qty[row["product_id"]] += dec(row["quantity"]) if kind == "purchase" else -dec(row["quantity"])
     sheet_qty: dict[Any, Decimal] = defaultdict(lambda: ZERO)
-    for row in inventory:
-        if row.get("product_id") in product_ids: sheet_qty[row["product_id"]] += dec(row.get("stock_quantity"))
+    for row in valid_inventory_records:
+        sheet_qty[row["product_id"]] += dec(row["stock_quantity"])
     all_sales = [_sale_output(s, start, end) for engine in continuation.values() for s in engine.sales]
     all_sales.sort(key=lambda row: (row["date"], voucher_sort_key(row["voucher"]), row["excel_row"] or 10**12))
     period_shortage_sales = [sale for sale in all_sales if sale["in_analysis_period"] and dec(sale["unconfirmed_quantity"]) > ZERO]
@@ -622,6 +689,11 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
             return False
         if error.get("code") == "invalid_quantity":
             return True
+        if error.get("code") == "missing_product_id":
+            try:
+                return dec(error.get("quantity")) > ZERO
+            except ValueError:
+                return False
         if error.get("code") == "invalid_unit_price":
             quantity = error.get("quantity")
             if quantity in (None, ""):
@@ -669,17 +741,35 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
     global_quantity_validation_error_count = 0
     quantity_validation_error_count = 0
     for state in transaction_validations:
-        if state.get("quantity_valid"):
+        if state.get("quantity_eligible"):
             continue
         quantity_validation_error_count += 1
-        if not state.get("date_valid"):
-            continue
         product_id = state.get("product_id")
-        if product_id in (None, ""):
-            if iso_date(state["date"]) <= stock_date:
+        if not state.get("date_valid"):
+            # The date cannot be compared to the stock date.  A known product
+            # receives a product-level validation_error; an unassigned row is
+            # a global error.  Both make the aggregate reconciliation invalid.
+            if product_id in (None, ""):
                 global_quantity_validation_error_count += 1
+            else:
+                quantity_validation_error_products.add(product_id)
         elif iso_date(state["date"]) <= stock_date:
-            quantity_validation_error_products.add(product_id)
+            if product_id in (None, ""):
+                global_quantity_validation_error_count += 1
+            else:
+                quantity_validation_error_products.add(product_id)
+
+    quantity_reconciliation_validation_error_products = (
+        quantity_validation_error_products | inventory_validation_error_products
+    )
+    quantity_reconciliation_validation_error_count = (
+        len(quantity_reconciliation_validation_error_products)
+        + global_quantity_validation_error_count
+        + global_inventory_snapshot_validation_error_count
+    )
+    quantity_reconciliation_validation_status = (
+        "validation_error" if quantity_reconciliation_validation_error_count else "valid"
+    )
 
     material_fifo_errors = [
         *opening_fifo_errors,
@@ -707,6 +797,13 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
         s_events = [e for e in future.sales_cost_events if start <= iso_date(e["date"]) <= end]
         purchases_period = [r for r,k in product_quantity_period if k == "purchase"]; sales_period = [r for r,k in product_quantity_period if k == "sales"]
         normal_qty = sum((l.remaining_quantity for l in end_layers), ZERO); normal_amt = sum((l.remaining_quantity*l.unit_cost for l in end_layers), ZERO)
+        opening_signed = sum((
+            dec(r["quantity"]) if k == "purchase" else -dec(r["quantity"])
+            for r, k in product_quantity_pre
+        ), ZERO)
+        opening_normal = max(opening_signed, ZERO)
+        opening_negative = max(-opening_signed, ZERO)
+        opening_costed_layer_quantity = sum((l.remaining_quantity for l in opened_layers), ZERO)
         signed = sum((dec(r["quantity"]) if k == "purchase" else -dec(r["quantity"]) for r,k in product_quantity_pre + product_quantity_period), ZERO)
         outputs = sales_by_product[product_id]
         period_outputs = [sale for sale in outputs if sale["in_analysis_period"]]
@@ -730,8 +827,21 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
         status = "error" if product_id in material_fifo_error_products else ("unconfirmed" if all_unconfirmed > ZERO else ("backfilled" if all_backfilled_qty > ZERO else "confirmed"))
         inv = sheet_qty.get(product_id); book = inventory_qty.get(product_id, ZERO); difference = inv-book if product_id in sheet_qty else None
         recon = "inventory_only" if product_id not in ledger_ids else ("ledger_only" if inv is None else ("inventory_negative_stock" if inv < ZERO else ("match" if difference == ZERO else ("inventory_more" if difference > ZERO else "ledger_more"))))
-        quantity_reconciliation_validation_status = "error" if product_id in quantity_validation_error_products else "valid"
-        if quantity_reconciliation_validation_status == "error":
+        ledger_quantity_validation_status = "validation_error" if product_id in quantity_validation_error_products else "valid"
+        inventory_statuses = inventory_validation_statuses_by_product.get(product_id, set())
+        inventory_validation_status = next(
+            (
+                status for status in ("missing_stock_quantity", "invalid_stock_quantity")
+                if status in inventory_statuses
+            ),
+            "valid",
+        )
+        row_quantity_reconciliation_validation_status = (
+            "validation_error"
+            if product_id in quantity_reconciliation_validation_error_products
+            else "valid"
+        )
+        if row_quantity_reconciliation_validation_status == "validation_error":
             recon = "validation_error"
         layer_output = [{"layer_id":l.layer_id,"product_id":l.product_id,"purchase_date":l.purchase_date.isoformat(),"voucher":l.voucher,"excel_row":l.excel_row,"original_quantity":out_number(l.original_quantity),"remaining_quantity":out_number(l.remaining_quantity),"unit_cost":out_number(l.unit_cost),"post_period_end":False,"remaining_amount":out_money(l.remaining_quantity*l.unit_cost)} for l in end_layers]
         prior_settlement_events = [event for event in snapshot.inventory_cost_events if event["event_type"] == "shortage_backfill_consumption" and iso_date(event["date"]) >= start and event.get("sale_date") and iso_date(event["sale_date"]) < start]
@@ -763,7 +873,7 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
             for state in product_amount_states
         )
         profit_status = "error" if status == "error" or invalid_sales_supply else ("provisional" if period_unconfirmed > ZERO else "confirmed")
-        row = {"product_id":product_id,"item_name":sorted(names[product_id])[0] if names[product_id] else None,"item_names":sorted(names[product_id]),"specification":sorted(specs[product_id])[0] if specs[product_id] else None,"specifications":sorted(specs[product_id]),"opening_stock_quantity":out_number(sum((l.remaining_quantity for l in opened_layers),ZERO)),"opening_stock_amount":out_money(sum((l.remaining_quantity*l.unit_cost for l in opened_layers),ZERO)),"period_purchase_quantity":out_number(sum((dec(r["quantity"]) for r in purchases_period),ZERO)),"period_purchase_cost_amount":out_money(sum((dec(e["_cost_decimal"]) for e in p_events),ZERO)),"period_sales_quantity":out_number(sum((dec(r["quantity"]) for r in sales_period),ZERO)),"period_sales_supply_amount":out_money(period_sales_supply),"period_sales_supply_amount_exact":exact_money(period_sales_supply),"period_sales_vat_amount":out_money(period_sales_vat),"period_sales_total_amount":out_money(period_sales_total),"period_sales_amount":out_money(period_sales_supply),"fifo_sales_cost_amount":out_money(fifo_sales_cost),"fifo_sales_cost_amount_exact":exact_money(fifo_sales_cost),"ending_signed_stock_quantity":out_number(signed),"ending_normal_stock_quantity":out_number(normal_qty),"ending_fifo_inventory_amount":out_money(normal_amt),"ending_negative_stock_quantity":out_number(max(-signed,ZERO)),"period_backfilled_quantity":out_number(period_backfilled_qty),"period_backfilled_amount":out_money(period_backfilled_amt),"all_backfilled_quantity":out_number(all_backfilled_qty),"all_backfilled_amount":out_money(all_backfilled_amt),"post_period_backfill_quantity":out_number(period_backfilled_qty),"post_period_backfill_amount":out_money(period_backfilled_amt),"prior_period_shortage_settlement_quantity":out_number(prior_settlement_quantity),"prior_period_shortage_settlement_amount":out_money(prior_settlement),"backfilled_quantity":out_number(period_backfilled_qty),"backfilled_amount":out_money(period_backfilled_amt),"opening_unconfirmed_quantity":out_number(opening_unconfirmed),"period_unconfirmed_quantity":out_number(period_unconfirmed),"all_unconfirmed_quantity":out_number(all_unconfirmed),"unconfirmed_quantity":out_number(all_unconfirmed),"unconfirmed_sales_supply_amount":out_money(period_unconfirmed_supply),"cost_status":status,"inventory_book_quantity":out_number(book),"inventory_sheet_quantity":out_number(inv) if inv is not None else None,"inventory_quantity_difference":out_number(difference) if difference is not None else None,"quantity_reconciliation_status":recon,"quantity_reconciliation_validation_status":quantity_reconciliation_validation_status,"remaining_cost_layers":layer_output,"purchase_quantity":out_number(sum((dec(r["quantity"]) for r in purchases_period),ZERO)),"sales_quantity":out_number(sum((dec(r["quantity"]) for r in sales_period),ZERO)),"calculated_stock_quantity":out_number(book),"inventory_quantity":out_number(inv) if inv is not None else None,"quantity_difference":out_number(difference) if difference is not None else None,"period_purchase_supply_amount":out_money(period_purchase_supply),"period_purchase_vat_amount":out_money(period_purchase_vat),"period_purchase_total_amount":out_money(period_purchase_total),"purchase_amount":out_money(period_purchase_supply),"sales_amount":out_money(period_sales_supply)}
+        row = {"product_id":product_id,"item_name":sorted(names[product_id])[0] if names[product_id] else None,"item_names":sorted(names[product_id]),"specification":sorted(specs[product_id])[0] if specs[product_id] else None,"specifications":sorted(specs[product_id]),"opening_stock_quantity":out_number(opening_signed),"opening_signed_stock_quantity":out_number(opening_signed),"opening_normal_stock_quantity":out_number(opening_normal),"opening_negative_stock_quantity":out_number(opening_negative),"opening_costed_layer_quantity":out_number(opening_costed_layer_quantity),"opening_stock_amount":out_money(sum((l.remaining_quantity*l.unit_cost for l in opened_layers),ZERO)),"period_purchase_quantity":out_number(sum((dec(r["quantity"]) for r in purchases_period),ZERO)),"period_purchase_cost_amount":out_money(sum((dec(e["_cost_decimal"]) for e in p_events),ZERO)),"period_sales_quantity":out_number(sum((dec(r["quantity"]) for r in sales_period),ZERO)),"period_sales_supply_amount":out_money(period_sales_supply),"period_sales_supply_amount_exact":exact_money(period_sales_supply),"period_sales_vat_amount":out_money(period_sales_vat),"period_sales_total_amount":out_money(period_sales_total),"period_sales_amount":out_money(period_sales_supply),"fifo_sales_cost_amount":out_money(fifo_sales_cost),"fifo_sales_cost_amount_exact":exact_money(fifo_sales_cost),"ending_signed_stock_quantity":out_number(signed),"ending_normal_stock_quantity":out_number(normal_qty),"ending_fifo_inventory_amount":out_money(normal_amt),"ending_negative_stock_quantity":out_number(max(-signed,ZERO)),"period_backfilled_quantity":out_number(period_backfilled_qty),"period_backfilled_amount":out_money(period_backfilled_amt),"all_backfilled_quantity":out_number(all_backfilled_qty),"all_backfilled_amount":out_money(all_backfilled_amt),"post_period_backfill_quantity":out_number(period_backfilled_qty),"post_period_backfill_amount":out_money(period_backfilled_amt),"prior_period_shortage_settlement_quantity":out_number(prior_settlement_quantity),"prior_period_shortage_settlement_amount":out_money(prior_settlement),"backfilled_quantity":out_number(period_backfilled_qty),"backfilled_amount":out_money(period_backfilled_amt),"opening_unconfirmed_quantity":out_number(opening_unconfirmed),"period_unconfirmed_quantity":out_number(period_unconfirmed),"all_unconfirmed_quantity":out_number(all_unconfirmed),"unconfirmed_quantity":out_number(all_unconfirmed),"unconfirmed_sales_supply_amount":out_money(period_unconfirmed_supply),"cost_status":status,"ledger_quantity_validation_status":ledger_quantity_validation_status,"inventory_validation_status":inventory_validation_status,"inventory_book_quantity":out_number(book),"inventory_sheet_quantity":out_number(inv) if inv is not None else None,"inventory_quantity_difference":out_number(difference) if difference is not None else None,"quantity_reconciliation_status":recon,"quantity_reconciliation_validation_status":row_quantity_reconciliation_validation_status,"remaining_cost_layers":layer_output,"purchase_quantity":out_number(sum((dec(r["quantity"]) for r in purchases_period),ZERO)),"sales_quantity":out_number(sum((dec(r["quantity"]) for r in sales_period),ZERO)),"calculated_stock_quantity":out_number(book),"inventory_quantity":out_number(inv) if inv is not None else None,"quantity_difference":out_number(difference) if difference is not None else None,"period_purchase_supply_amount":out_money(period_purchase_supply),"period_purchase_vat_amount":out_money(period_purchase_vat),"period_purchase_total_amount":out_money(period_purchase_total),"purchase_amount":out_money(period_purchase_supply),"sales_amount":out_money(period_sales_supply)}
         row["gross_profit"] = out_money(gross_profit)
         row.update(
             gross_profit_exact=exact_money(gross_profit),
@@ -778,6 +888,14 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
             for allocation in sale["allocations"]:
                 if allocation["backfilled"]: backfills.append({"sale_id":sale["sale_id"],"product_id":product_id,**allocation})
     status_counts={s:sum(r["cost_status"]==s for r in rows) for s in ("confirmed","backfilled","unconfirmed","error")}; recon_statuses=("match","inventory_more","ledger_more","ledger_only","inventory_only","inventory_negative_stock","validation_error"); recon_counts={s:sum(r["quantity_reconciliation_status"]==s for r in rows) for s in recon_statuses}
+    quantity_difference_statuses = {"inventory_more", "ledger_more", "inventory_negative_stock"}
+    quantity_difference_rows = [
+        row for row in rows
+        if row["quantity_reconciliation_status"] in quantity_difference_statuses
+    ]
+    quantity_reconciliation_non_match_count = sum(
+        row["quantity_reconciliation_status"] != "match" for row in rows
+    )
     # Do not re-sum row-level display values: individual values are rounded for
     # JSON readability, while every summary remains a direct Decimal sum.
     period_purchases = [row for row, kind in quantity_period if kind == "purchase"]
@@ -897,12 +1015,12 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
         "remainder_at_fifo":out_money(gross_profit), "inventory_amount_at_average_cost":None,"inventory_amount_at_latest_purchase_price":None,"remainder_at_average_cost":None,"remainder_at_latest_purchase_price":None,
     }
     def total(key: str) -> Decimal: return sum((dec(row[key]) for row in rows), ZERO)
-    summary.update({key:out_number(total(key)) for key in ("opening_stock_quantity","period_purchase_quantity","period_sales_quantity","ending_signed_stock_quantity","ending_normal_stock_quantity","ending_negative_stock_quantity","backfilled_quantity")})
+    summary.update({key:out_number(total(key)) for key in ("opening_stock_quantity","opening_signed_stock_quantity","opening_normal_stock_quantity","opening_negative_stock_quantity","opening_costed_layer_quantity","period_purchase_quantity","period_sales_quantity","ending_signed_stock_quantity","ending_normal_stock_quantity","ending_negative_stock_quantity","backfilled_quantity")})
     summary["opening_unconfirmed_quantity"] = out_number(opening_unconfirmed_quantity)
     summary["period_unconfirmed_quantity"] = out_number(period_unconfirmed_quantity)
     summary["all_unconfirmed_quantity"] = out_number(all_unconfirmed_quantity)
     summary["unconfirmed_quantity"] = out_number(all_unconfirmed_quantity)
-    summary.update({"cost_status_counts":status_counts,"status_counts":status_counts,"quantity_reconciliation_mismatch_count":sum(r["quantity_reconciliation_status"] != "match" for r in rows),"inventory_reconciliation_mismatch_count":sum(r["quantity_reconciliation_status"] != "match" for r in rows),"quantity_reconciliation_validation_error_count":sum(r["quantity_reconciliation_validation_status"] == "error" for r in rows),"quantity_validation_error_count":quantity_validation_error_count,"global_quantity_validation_error_count":global_quantity_validation_error_count,"opening_fifo_error_count":len(opening_fifo_errors),"period_fifo_error_count":len(period_fifo_errors),"backfill_dependency_error_count":len(backfill_dependency_errors),"post_period_unrelated_error_count":len(post_period_unrelated_errors),"error_count":len(errors)+len(amount_validation_errors)+len(all_engine_errors),"amount_validation_status":amount_validation_status,"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":len(period_amount_errors),"global_fifo_error_count":global_fifo_error_count,"reconciliation_status_counts":recon_counts,"unassigned_backfill_validation_error":unassigned_backfill_validation_error})
+    summary.update({"cost_status_counts":status_counts,"status_counts":status_counts,"quantity_difference_count":len(quantity_difference_rows),"quantity_reconciliation_mismatch_count":len(quantity_difference_rows),"inventory_reconciliation_mismatch_count":len(quantity_difference_rows),"quantity_reconciliation_non_match_count":quantity_reconciliation_non_match_count,"quantity_reconciliation_validation_status":quantity_reconciliation_validation_status,"quantity_reconciliation_validation_error_count":quantity_reconciliation_validation_error_count,"quantity_validation_error_count":quantity_validation_error_count,"global_quantity_validation_error_count":global_quantity_validation_error_count,"inventory_snapshot_validation_error_count":inventory_snapshot_validation_error_count,"global_inventory_snapshot_validation_error_count":global_inventory_snapshot_validation_error_count,"ledger_only_count":recon_counts["ledger_only"],"inventory_only_count":recon_counts["inventory_only"],"inventory_negative_stock_count":recon_counts["inventory_negative_stock"],"opening_fifo_error_count":len(opening_fifo_errors),"period_fifo_error_count":len(period_fifo_errors),"backfill_dependency_error_count":len(backfill_dependency_errors),"post_period_unrelated_error_count":len(post_period_unrelated_errors),"error_count":len(errors)+len(amount_validation_errors)+len(all_engine_errors),"amount_validation_status":amount_validation_status,"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":len(period_amount_errors),"global_fifo_error_count":global_fifo_error_count,"reconciliation_status_counts":recon_counts,"unassigned_backfill_validation_error":unassigned_backfill_validation_error})
     summary.update({
         "period_purchase_record_count": len(amount_period_purchases),
         "period_sales_record_count": len(amount_period_sales),
@@ -915,4 +1033,4 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
         if len(specs[product_id])>1: warnings.append({"code":"specification_mismatch","product_id":product_id,"values":sorted(specs[product_id])})
     public_events=[_clean(e) for engine in continuation.values() for e in engine.sales_cost_events]; public_unconfirmed_events=[_clean(e) for engine in continuation.values() for e in engine.unconfirmed_quantity_events]; public_purchases=[_clean(e) for engine in continuation.values() for e in engine.purchase_cost_events]; public_inventory_events=[_clean(e) for engine in ending.values() for e in engine.inventory_cost_events]
     all_dates=[iso_date(r["date"]) for r,k in dated_records]; purchase_dates=[iso_date(r["date"]) for r,k in dated_records if k=="purchase"]
-    return {"metadata":{"period_start":start.isoformat(),"period_end":end.isoformat(),"inventory_date":stock_date.isoformat(),"analysis_start_date":start.isoformat(),"analysis_end_date":end.isoformat(),"inventory_reference_date":stock_date.isoformat(),"input_data_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_data_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_data_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"input_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"backfill_last_purchase_date":max((a["purchase_date"] for a in backfills),default=None),"costing_method":"FIFO","inventory_unit_costs_used":False,"inventory_price_fields_ignored":["average_cost","latest_purchase_price","sales_price"]},"summary":summary,"rows":rows,"sales_allocations":all_sales,"sales_cost_events":public_events,"unconfirmed_quantity_events":public_unconfirmed_events,"purchase_cost_events":public_purchases,"inventory_cost_events":public_inventory_events,"unconfirmed_shipments":unconfirmed,"backfill_allocations":backfills,"cancellation_events":[event for engine in continuation.values() for event in engine.cancellations],"transaction_validations":transaction_validations,"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":summary["amount_validation_error_count"],"errors":errors+amount_validation_errors+all_engine_errors,"warnings":warnings,"calculated_negative_stock":[row for row in rows if dec(row["ending_signed_stock_quantity"])<ZERO],"inventory_negative_stock":[row for row in rows if row["quantity_reconciliation_status"]=="inventory_negative_stock"],"quantity_mismatches":[row for row in rows if row["quantity_reconciliation_status"]!="match"]}
+    return {"metadata":{"period_start":start.isoformat(),"period_end":end.isoformat(),"inventory_date":stock_date.isoformat(),"analysis_start_date":start.isoformat(),"analysis_end_date":end.isoformat(),"inventory_reference_date":stock_date.isoformat(),"input_data_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_data_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_data_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"input_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"backfill_last_purchase_date":max((a["purchase_date"] for a in backfills),default=None),"costing_method":"FIFO","inventory_unit_costs_used":False,"inventory_price_fields_ignored":["average_cost","latest_purchase_price","sales_price"]},"summary":summary,"rows":rows,"sales_allocations":all_sales,"sales_cost_events":public_events,"unconfirmed_quantity_events":public_unconfirmed_events,"purchase_cost_events":public_purchases,"inventory_cost_events":public_inventory_events,"unconfirmed_shipments":unconfirmed,"backfill_allocations":backfills,"cancellation_events":[event for engine in continuation.values() for event in engine.cancellations],"transaction_validations":transaction_validations,"inventory_validations":inventory_validations,"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":summary["amount_validation_error_count"],"errors":errors+amount_validation_errors+all_engine_errors,"warnings":warnings,"calculated_negative_stock":[row for row in rows if dec(row["ending_signed_stock_quantity"])<ZERO],"inventory_negative_stock":[row for row in rows if row["quantity_reconciliation_status"]=="inventory_negative_stock"],"quantity_mismatches":quantity_difference_rows,"quantity_reconciliation_non_matches":[row for row in rows if row["quantity_reconciliation_status"]!="match"]}
