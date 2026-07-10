@@ -63,34 +63,41 @@ def _replace_between(
 
 
 def render_amount_balance_chart(
-    opening_amount: int | float,
-    purchase_amount: int | float,
-    sales_amount: int | float,
-    inventory_amount: int | float,
-    backfill_amount: int | float,
-    prior_shortage_settlement_amount: int | float,
-    gross_profit: int | float,
+    opening_amount: Any,
+    purchase_amount: Any,
+    sales_amount: Any,
+    inventory_amount: Any,
+    backfill_amount: Any,
+    prior_shortage_settlement_amount: Any,
+    gross_profit: Any,
 ) -> str:
-    """Render the stated FIFO identity rather than a misleading four-block residual."""
-    left_total = sales_amount + inventory_amount + prior_shortage_settlement_amount
-    right_total = opening_amount + purchase_amount + backfill_amount + gross_profit
-    if any(value < 0 for value in (sales_amount, inventory_amount, opening_amount, purchase_amount, backfill_amount, prior_shortage_settlement_amount, gross_profit)):
+    """Render the FIFO identity only when its Decimal components match exactly."""
+    values = [
+        _base.decimal_amount(value)
+        for value in (opening_amount, purchase_amount, sales_amount, inventory_amount, backfill_amount, prior_shortage_settlement_amount, gross_profit)
+    ]
+    if any(value is None for value in values):
+        return '<div class="balance-chart-empty" role="note">금액 밸런스 exact 구성요소가 없어 차트를 표시할 수 없다.</div>'
+    opening, purchase, sales, inventory, backfill, prior_shortage, profit = values
+    left_total = sales + inventory + prior_shortage
+    right_total = opening + purchase + backfill + profit
+    if any(value < 0 for value in values):
         return '<div class="balance-chart-empty" role="note">원가 미확정·오류 또는 음수 이익이 있어 금액 밸런스 차트는 확정값으로 표시하지 않는다.</div>'
-    if round(left_total) != round(right_total):
-        return f'<div class="balance-chart-empty" role="note">금액 밸런스 불일치: 왼쪽 {_base.money(left_total)}원 / 오른쪽 {_base.money(right_total)}원</div>'
+    if left_total != right_total:
+        return f'<div class="balance-chart-empty" role="note">금액 밸런스 불일치: 왼쪽 {_base.money(_base.rounded_amount(left_total))}원 / 오른쪽 {_base.money(_base.rounded_amount(right_total))}원</div>'
     total = left_total or 1
-    def segments(x: int, values: list[tuple[str, int | float]], color: str) -> str:
+    def segments(x: int, entries: list[tuple[str, Decimal]], color: str) -> str:
         y, result = 302.0, []
-        for label, value in values:
-            height = value / total * 220
+        for label, value in entries:
+            height = float(value / total * Decimal("220"))
             y -= height
-            result.append(f'<rect x="{x}" y="{y:.1f}" width="190" height="{height:.1f}" rx="3" fill="{color}" opacity=".82"></rect><text x="{x + 95}" y="{y + height / 2:.1f}" text-anchor="middle">{escape(label)} {_base.money(value)}원</text>')
+            result.append(f'<rect x="{x}" y="{y:.1f}" width="190" height="{height:.1f}" rx="3" fill="{color}" opacity=".82"></rect><text x="{x + 95}" y="{y + height / 2:.1f}" text-anchor="middle">{escape(label)} {_base.money(_base.rounded_amount(value))}원</text>')
         return "".join(result)
     return f'''<div class="chart-wrap balance-chart-wrap" aria-label="금액 대사 밸런스 블록 차트">
       <svg id="amount-balance-chart" viewBox="0 0 980 410" role="img"><title>FIFO 금액 밸런스 차트</title><desc>매출과 종료일 FIFO 재고는 기초재고, 기간 순매입원가, 후속 소급배정원가 및 매출총이익의 합계와 같다.</desc>
-      <text x="490" y="34" text-anchor="middle">양쪽 합계 {_base.money(left_total)}원</text>
-      {segments(170, [('매출 공급가액', sales_amount), ('종료일 재고', inventory_amount), ('이전기간 부족 보충', prior_shortage_settlement_amount)], '#2f6f7e')}
-      {segments(620, [('기초재고', opening_amount), ('기간 순매입', purchase_amount), ('후속 소급배정', backfill_amount), ('매출총이익', gross_profit)], '#c47a23')}
+      <text x="490" y="34" text-anchor="middle">양쪽 exact 합계 {_base.money(_base.rounded_amount(left_total))}원</text>
+      {segments(170, [('매출 공급가액', sales), ('종료일 재고', inventory), ('이전기간 부족 보충', prior_shortage)], '#2f6f7e')}
+      {segments(620, [('기초재고', opening), ('기간 순매입', purchase), ('후속 소급배정', backfill), ('매출총이익', profit)], '#c47a23')}
       <text x="265" y="350" text-anchor="middle">매출 공급가액 + 재고 + 이전기간 보충</text><text x="715" y="350" text-anchor="middle">기초재고 + 매입 + 소급배정 + 이익</text></svg></div>'''
 
 
@@ -197,16 +204,18 @@ def render_problem_item_rows(payload: dict[str, Any]) -> str:
     problems = [
         row for row in payload.get("rows", [])
         if row.get("cost_status") in {"backfilled", "unconfirmed", "error"}
+        or row.get("amount_validation_status") != "valid"
         or row.get("quantity_reconciliation_status") != "match"
         or row.get("product_id") in error_codes
     ]
     if not problems:
-        return '<tr><td colspan="12">없음</td></tr>'
+        return '<tr><td colspan="13">없음</td></tr>'
     return "\n".join(
         "<tr>"
         f"<td>{escape(str(row.get('product_id') if row.get('product_id') is not None else '-'))}</td>"
         f"<td>{escape(str(row.get('item_name') or '-'))}</td>"
         f"<td><code>{escape(str(row.get('cost_status') or '-'))}</code></td>"
+        f"<td><code>{escape(str(row.get('amount_validation_status') or '-'))}</code></td>"
         f"<td class=\"money\">{_base.number(row.get('opening_unconfirmed_quantity') or 0)}</td>"
         f"<td class=\"money\">{_base.number(row.get('period_unconfirmed_quantity') or 0)}</td>"
         f"<td class=\"money\">{_base.number(row.get('all_unconfirmed_quantity', row.get('unconfirmed_quantity')) or 0)}</td>"
@@ -298,6 +307,13 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     opening_amount = reconciliation.get("opening_stock_amount", 0)
     backfill_amount = reconciliation.get("post_period_backfill_amount", reconciliation.get("backfilled_amount", 0))
     prior_shortage_settlement_amount = reconciliation.get("prior_period_shortage_settlement_amount", 0)
+    exact_opening_amount = reconciliation.get("opening_stock_amount_exact", opening_amount)
+    exact_purchase_amount = reconciliation.get("period_purchase_cost_amount_exact", purchase_amount)
+    exact_sales_amount = reconciliation.get("period_sales_supply_amount_exact", sales_amount)
+    exact_inventory_amount = reconciliation.get("ending_fifo_inventory_amount_exact", inventory_amount)
+    exact_backfill_amount = reconciliation.get("period_backfilled_amount_exact", backfill_amount)
+    exact_prior_shortage_settlement_amount = reconciliation.get("prior_period_shortage_settlement_amount_exact", prior_shortage_settlement_amount)
+    exact_gross_profit = reconciliation.get("gross_profit_exact", reconciliation_remainder)
     fifo_sales_cost = reconciliation.get("fifo_sales_cost_amount", 0)
     gross_profit_label = "매출총이익" if reconciliation.get("gross_profit_status") == "confirmed" else "잠정 매출총이익"
     vat_settlement = reconciliation.get("vat_settlement_amount", 0)
@@ -314,18 +330,17 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     problem_rows = render_problem_item_rows(reconciliation_payload)
     transaction_error_rows = render_transaction_error_rows(reconciliation_payload)
 
+    amount_balance_chart = render_amount_balance_chart(
+        exact_opening_amount,
+        exact_purchase_amount,
+        exact_sales_amount,
+        exact_inventory_amount,
+        exact_backfill_amount,
+        exact_prior_shortage_settlement_amount,
+        exact_gross_profit,
+    )
     if reconciliation.get("gross_profit_status") != "confirmed":
-        amount_balance_chart = '<div class="balance-chart-empty" role="note">원가 미확정 또는 계산 오류가 있어 금액 밸런스 차트는 잠정값으로만 검토해야 한다.</div>'
-    else:
-        amount_balance_chart = render_amount_balance_chart(
-            opening_amount,
-            purchase_amount,
-            sales_amount,
-            inventory_amount,
-            backfill_amount,
-            prior_shortage_settlement_amount,
-            reconciliation_remainder,
-        )
+        amount_balance_chart += '<p class="section-note">손익 상태가 확정이 아니므로, 차트는 exact 금액 항등식 일치 여부만 나타내며 확정 손익을 뜻하지 않는다.</p>'
     html = _replace_once(html, "<!-- AMOUNT_BALANCE_CHART -->", amount_balance_chart, "amount balance chart")
 
     amount_rows = [
@@ -442,7 +457,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         </section>
         <section aria-labelledby="problem-items-title">
           <h3 id="problem-items-title">문제 품목 상세</h3>
-          <div class="table-scroll"><table><thead><tr><th>product_id</th><th>품명</th><th>원가 상태</th><th>기초 미확정 출고</th><th>기간 미확정 출고</th><th>전체 미확정 수량</th><th>종료일 음수재고</th><th>기준일 장부수량</th><th>재고 시트 수량</th><th>수량 차이</th><th>수량 대사 상태</th><th>오류/경고</th></tr></thead><tbody>{problem_rows}</tbody></table></div>
+          <div class="table-scroll"><table><thead><tr><th>product_id</th><th>품명</th><th>FIFO 원가 상태</th><th>금액 구성 검증 상태</th><th>기초 미확정 출고</th><th>기간 미확정 출고</th><th>전체 미확정 수량</th><th>종료일 음수재고</th><th>기준일 장부수량</th><th>재고 시트 수량</th><th>수량 차이</th><th>수량 대사 상태</th><th>오류/경고</th></tr></thead><tbody>{problem_rows}</tbody></table></div>
         </section>
         <section aria-labelledby="transaction-errors-title">
           <h3 id="transaction-errors-title">거래 단위 오류 상세</h3>

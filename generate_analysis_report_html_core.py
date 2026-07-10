@@ -216,10 +216,21 @@ def weekly_purchase_sales_amounts(
         if event_date is not None and in_period(row) and row.get("event_type") in {"sale", "sale_cancellation", "shortage_backfill"}:
             unconfirmed_delta_by_day[event_date] += decimal_amount(row.get("unconfirmed_quantity_delta")) or Decimal("0")
 
-    error_keys = {
+    margin_error_keys = {
         error_key(row)
         for row in (reconciliation or {}).get("errors", [])
         if row.get("date") and in_period(row) and (row.get("affects_revenue") or row.get("affects_fifo_cost"))
+    }
+    validation_states = (reconciliation or {}).get("transaction_validations", [])
+    valid_supply_keys = {
+        error_key(state)
+        for state in validation_states
+        if state.get("source") == "sales" and state.get("supply_amount_valid") and in_period(state)
+    }
+    amount_error_keys = {
+        error_key(state)
+        for state in validation_states
+        if state.get("source") == "sales" and state.get("amount_validation_status") != "valid" and in_period(state)
     }
     related_backfill_sale_ids = {
         sale_id
@@ -227,6 +238,12 @@ def weekly_purchase_sales_amounts(
         for sale_id in error.get("affected_sale_ids", [])
     }
     errors_by_day: dict[date, int] = defaultdict(int)
+    amount_errors_by_day: dict[date, int] = defaultdict(int)
+    amount_statuses_by_day: dict[date, set[str]] = defaultdict(set)
+    for state in validation_states:
+        state_date = safe_iso_date(state.get("date"))
+        if state.get("source") == "sales" and state_date is not None and in_period(state) and state.get("amount_validation_status") != "valid":
+            amount_statuses_by_day[state_date].add(str(state["amount_validation_status"]))
 
     for row in purchase_records:
         if in_period(row):
@@ -243,21 +260,26 @@ def weekly_purchase_sales_amounts(
         if row_date is None:
             continue
         supply_amount = decimal_amount(row.get("supply_amount"))
-        if supply_amount is not None and error_key(row, "sales") not in error_keys:
+        key = error_key(row, "sales")
+        # New reconciliations publish component validity.  The fallback keeps
+        # older JSON reports readable without treating total_amount as supply.
+        if supply_amount is not None and (not validation_states or key in valid_supply_keys):
             sales_by_day[row_date] += supply_amount
         sale_id = f"{row.get('date')}|{row.get('voucher')}|{row.get('excel_row')}"
         cost_by_day[row_date] += fifo_cost_by_sale.get(sale_id, 0)
         quantity_by_day[row_date] += row.get("quantity") or 0
         row_count_by_day[row_date] += 1
-        if error_key(row, "sales") in error_keys or sale_id in related_backfill_sale_ids:
+        if key in margin_error_keys or sale_id in related_backfill_sale_ids:
             errors_by_day[row_date] += 1
+        if key in amount_error_keys:
+            amount_errors_by_day[row_date] += 1
         date_values.append(row_date)
 
     if not date_values:
         return []
 
     grouped: dict[date, dict[str, Any]] = defaultdict(
-        lambda: {"row_count": 0, "quantity": 0, "sales_amount": Decimal("0"), "cost_amount": Decimal("0"), "unconfirmed_quantity_delta": Decimal("0"), "current_unconfirmed_quantity": Decimal("0"), "error_count": 0}
+        lambda: {"row_count": 0, "quantity": 0, "sales_amount": Decimal("0"), "cost_amount": Decimal("0"), "unconfirmed_quantity_delta": Decimal("0"), "current_unconfirmed_quantity": Decimal("0"), "error_count": 0, "amount_validation_error_count": 0, "amount_validation_statuses": set()}
     )
     current = min(date_values)
     end_date = max(date_values)
@@ -268,6 +290,8 @@ def weekly_purchase_sales_amounts(
         grouped[week_start(current.isoformat())]["cost_amount"] += cost_by_day.get(current, 0)
         grouped[week_start(current.isoformat())]["unconfirmed_quantity_delta"] += unconfirmed_delta_by_day.get(current, Decimal("0"))
         grouped[week_start(current.isoformat())]["error_count"] += errors_by_day.get(current, 0)
+        grouped[week_start(current.isoformat())]["amount_validation_error_count"] += amount_errors_by_day.get(current, 0)
+        grouped[week_start(current.isoformat())]["amount_validation_statuses"].update(amount_statuses_by_day.get(current, set()))
         current += timedelta(days=1)
 
     result: list[dict[str, Any]] = []
@@ -285,6 +309,10 @@ def weekly_purchase_sales_amounts(
         }
         grouped[start]["current_unconfirmed_quantity"] = sum(sale_states.values(), Decimal("0"))
         margin_status = "error" if grouped[start]["error_count"] else ("provisional" if grouped[start]["current_unconfirmed_quantity"] else "confirmed")
+        amount_validation_status = next((
+            status for status in ("invalid_component", "missing_component", "component_mismatch")
+            if status in grouped[start]["amount_validation_statuses"]
+        ), "valid")
         result.append(
             {
                 "week_start": start.isoformat(),
@@ -297,12 +325,17 @@ def weekly_purchase_sales_amounts(
                 "cost_amount_exact": exact_amount(cost_amount_exact),
                 "margin_amount": margin_amount,
                 "margin_amount_exact": exact_amount(margin_amount_exact),
-                "rounding_difference": exact_amount(cost_amount_exact - Decimal(cost_amount)),
-                "margin_rate": (margin_amount / sales_amount * 100) if sales_amount and margin_status == "confirmed" else None,
+                "sales_rounding_difference": exact_amount(sales_amount_exact - Decimal(sales_amount)),
+                "cost_rounding_difference": exact_amount(cost_amount_exact - Decimal(cost_amount)),
+                "margin_rounding_difference": exact_amount(margin_amount_exact - Decimal(margin_amount)),
+                "margin_rate": float(margin_amount_exact / sales_amount_exact * Decimal("100")) if sales_amount_exact and margin_status == "confirmed" else None,
                 "unconfirmed_quantity": float(grouped[start]["current_unconfirmed_quantity"]),
                 "current_unconfirmed_quantity": float(grouped[start]["current_unconfirmed_quantity"]),
                 "unconfirmed_quantity_delta": float(grouped[start]["unconfirmed_quantity_delta"]),
                 "error_count": grouped[start]["error_count"],
+                "fifo_error_count": grouped[start]["error_count"],
+                "amount_validation_error_count": grouped[start]["amount_validation_error_count"],
+                "amount_validation_status": amount_validation_status,
                 "margin_status": margin_status,
             }
         )
@@ -494,8 +527,10 @@ def render_weekly_table_rows(rows: list[dict[str, Any]]) -> str:
     total_sales = sum((decimal_amount(row.get("sales_amount_exact")) or Decimal("0") for row in rows), Decimal("0"))
     total_cost = sum((decimal_amount(row.get("cost_amount_exact")) or Decimal("0") for row in rows), Decimal("0"))
     total_margin = total_sales - total_cost
-    rounding_difference = rounded_amount(total_cost) - sum(row.get("cost_amount", 0) for row in rows)
-    return body + f'''\n          <tr class="total-row"><th>총계 (exact 합계)</th><td></td><td></td><td class="money">{money(rounded_amount(total_sales))}</td><td class="money">{money(rounded_amount(total_cost))}</td><td class="money">{money(rounded_amount(total_margin))}</td><td colspan="2">반올림 차이 {money(rounding_difference)}원</td></tr>'''
+    sales_rounding_difference = rounded_amount(total_sales) - sum(row.get("sales_amount", 0) for row in rows)
+    cost_rounding_difference = rounded_amount(total_cost) - sum(row.get("cost_amount", 0) for row in rows)
+    margin_rounding_difference = rounded_amount(total_margin) - sum(row.get("margin_amount", 0) for row in rows)
+    return body + f'''\n          <tr class="total-row"><th>총계 (exact 합계)</th><td></td><td></td><td class="money">{money(rounded_amount(total_sales))}</td><td class="money">{money(rounded_amount(total_cost))}</td><td class="money">{money(rounded_amount(total_margin))}</td><td colspan="2">표시 반올림 차이: 매출 {money(sales_rounding_difference)}원 · 원가 {money(cost_rounding_difference)}원 · 마진 {money(margin_rounding_difference)}원</td></tr>'''
 
 
 def include_plotlyjs_option(value: Any) -> bool | str:
@@ -566,15 +601,28 @@ def principal_sales_cost_rows(
             "unconfirmed_quantity_delta": Decimal("0"),
             "unconfirmed_row_count": 0,
             "error_count": 0,
+            "amount_validation_error_count": 0,
+            "amount_validation_statuses": set(),
         }
     )
-    error_keys = {
+    margin_error_keys = {
         error_key(error)
         for error in (reconciliation or {}).get("errors", [])
         if error.get("source") == "sales" and safe_iso_date(error.get("date")) is not None
         and (not (reconciliation or {}).get("metadata", {}).get("period_start")
              or (reconciliation or {}).get("metadata", {}).get("period_start") <= error["date"] <= (reconciliation or {}).get("metadata", {}).get("period_end"))
         and (error.get("affects_revenue") or error.get("affects_fifo_cost"))
+    }
+    validation_states = (reconciliation or {}).get("transaction_validations", [])
+    valid_supply_keys = {
+        error_key(state)
+        for state in validation_states
+        if state.get("source") == "sales" and state.get("supply_amount_valid")
+    }
+    amount_states_by_key = {
+        error_key(state): str(state.get("amount_validation_status", "valid"))
+        for state in validation_states
+        if state.get("source") == "sales"
     }
     related_backfill_sale_ids = {
         sale_id
@@ -595,8 +643,13 @@ def principal_sales_cost_rows(
         group["row_count"] += 1
         group["quantity"] += row.get("quantity") or 0
         supply_amount = decimal_amount(row.get("supply_amount"))
-        if supply_amount is not None and error_key(row, "sales") not in error_keys:
+        key = error_key(row, "sales")
+        if supply_amount is not None and (not validation_states or key in valid_supply_keys):
             group["sales_amount"] += supply_amount
+        amount_status = amount_states_by_key.get(key, "valid")
+        if amount_status != "valid":
+            group["amount_validation_error_count"] += 1
+            group["amount_validation_statuses"].add(amount_status)
         sale = fifo_by_sale.get(sale_key(row))
         if sale is None:
             group["missing_cost_row_count"] += 1
@@ -612,7 +665,7 @@ def principal_sales_cost_rows(
         group["unconfirmed_quantity_delta"] += unconfirmed_delta
 
     for row in sales_records:
-        if error_key(row, "sales") not in error_keys:
+        if error_key(row, "sales") not in margin_error_keys:
             continue
         row_date = safe_iso_date(row.get("date"))
         period_start = ((reconciliation or {}).get("metadata") or {}).get("period_start")
@@ -631,6 +684,10 @@ def principal_sales_cost_rows(
         cost_amount = rounded_amount(cost_amount_exact)
         margin_amount = rounded_amount(margin_amount_exact)
         margin_status = "error" if values["error_count"] or values["missing_cost_row_count"] else ("provisional" if values["current_unconfirmed_quantity"] else "confirmed")
+        amount_validation_status = next((
+            status for status in ("invalid_component", "missing_component", "component_mismatch")
+            if status in values["amount_validation_statuses"]
+        ), "valid")
         rows.append(
             {
                 "principal": values["principal"],
@@ -642,14 +699,19 @@ def principal_sales_cost_rows(
                 "cost_amount_exact": exact_amount(cost_amount_exact),
                 "margin_amount": margin_amount,
                 "margin_amount_exact": exact_amount(margin_amount_exact),
-                "rounding_difference": exact_amount(cost_amount_exact - Decimal(cost_amount)),
-                "margin_rate": (margin_amount / sales_amount * 100) if sales_amount and margin_status == "confirmed" else None,
+                "sales_rounding_difference": exact_amount(sales_amount_exact - Decimal(sales_amount)),
+                "cost_rounding_difference": exact_amount(cost_amount_exact - Decimal(cost_amount)),
+                "margin_rounding_difference": exact_amount(margin_amount_exact - Decimal(margin_amount)),
+                "margin_rate": float(margin_amount_exact / sales_amount_exact * Decimal("100")) if sales_amount_exact and margin_status == "confirmed" else None,
                 "missing_cost_row_count": values["missing_cost_row_count"],
                 "unconfirmed_quantity": float(values["current_unconfirmed_quantity"]),
                 "current_unconfirmed_quantity": float(values["current_unconfirmed_quantity"]),
                 "unconfirmed_quantity_delta": float(values["unconfirmed_quantity_delta"]),
                 "unconfirmed_row_count": values["unconfirmed_row_count"],
                 "error_count": values["error_count"],
+                "fifo_error_count": values["error_count"] + values["missing_cost_row_count"],
+                "amount_validation_error_count": values["amount_validation_error_count"],
+                "amount_validation_status": amount_validation_status,
                 "margin_status": margin_status,
             }
         )
@@ -726,8 +788,10 @@ def render_principal_margin_rows(rows: list[dict[str, Any]]) -> str:
     total_sales = sum((decimal_amount(row.get("sales_amount_exact")) or Decimal("0") for row in rows), Decimal("0"))
     total_cost = sum((decimal_amount(row.get("cost_amount_exact")) or Decimal("0") for row in rows), Decimal("0"))
     total_margin = total_sales - total_cost
-    rounding_difference = rounded_amount(total_cost) - sum(row.get("cost_amount", 0) for row in rows)
-    return body + f'''\n          <tr class="total-row"><td></td><th>총계 (exact 합계)</th><td></td><td class="money">{money(rounded_amount(total_sales))}</td><td class="money">{money(rounded_amount(total_cost))}</td><td class="money">{money(rounded_amount(total_margin))}</td><td colspan="3">반올림 차이 {money(rounding_difference)}원</td></tr>'''
+    sales_rounding_difference = rounded_amount(total_sales) - sum(row.get("sales_amount", 0) for row in rows)
+    cost_rounding_difference = rounded_amount(total_cost) - sum(row.get("cost_amount", 0) for row in rows)
+    margin_rounding_difference = rounded_amount(total_margin) - sum(row.get("margin_amount", 0) for row in rows)
+    return body + f'''\n          <tr class="total-row"><td></td><th>총계 (exact 합계)</th><td></td><td class="money">{money(rounded_amount(total_sales))}</td><td class="money">{money(rounded_amount(total_cost))}</td><td class="money">{money(rounded_amount(total_margin))}</td><td colspan="3">표시 반올림 차이: 매출 {money(sales_rounding_difference)}원 · 원가 {money(cost_rounding_difference)}원 · 마진 {money(margin_rounding_difference)}원</td></tr>'''
 
 
 def unique_join(values: list[Any]) -> str:
