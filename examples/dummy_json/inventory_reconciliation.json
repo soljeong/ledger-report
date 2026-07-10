@@ -22,20 +22,20 @@
     ]
   },
   "summary": {
-    "opening_stock_quantity": 6,
     "opening_stock_amount": 600,
-    "period_purchase_quantity": 36,
     "period_purchase_cost_amount": 3790,
-    "period_sales_quantity": 38,
     "period_sales_amount": 9460,
     "fifo_sales_cost_amount": 4960,
+    "ending_fifo_inventory_amount": 1510,
+    "backfilled_amount": 2080,
     "gross_profit": 4500,
+    "opening_stock_quantity": 6,
+    "period_purchase_quantity": 36,
+    "period_sales_quantity": 38,
     "ending_signed_stock_quantity": 4,
     "ending_normal_stock_quantity": 19,
-    "ending_fifo_inventory_amount": 1510,
     "ending_negative_stock_quantity": 15,
     "backfilled_quantity": 10,
-    "backfilled_amount": 2080,
     "unconfirmed_quantity": 5,
     "cost_status_counts": {
       "confirmed": 5,
@@ -87,7 +87,6 @@
       "period_sales_quantity": 14,
       "period_sales_amount": 3500,
       "fifo_sales_cost_amount": 1620,
-      "gross_profit": 1880,
       "ending_signed_stock_quantity": 3,
       "ending_normal_stock_quantity": 3,
       "ending_fifo_inventory_amount": 450,
@@ -102,6 +101,7 @@
       "quantity_reconciliation_status": "match",
       "remaining_cost_layers": [
         {
+          "layer_id": "1001|2026-05-15|3|4|3",
           "product_id": 1001,
           "purchase_date": "2026-05-15",
           "voucher": 3,
@@ -119,7 +119,8 @@
       "inventory_quantity": 3,
       "quantity_difference": 0,
       "purchase_amount": 1470,
-      "sales_amount": 3500
+      "sales_amount": 3500,
+      "gross_profit": 1880
     },
     {
       "product_id": 1002,
@@ -138,7 +139,6 @@
       "period_sales_quantity": 10,
       "period_sales_amount": 3000,
       "fifo_sales_cost_amount": 2080,
-      "gross_profit": 920,
       "ending_signed_stock_quantity": -10,
       "ending_normal_stock_quantity": 0,
       "ending_fifo_inventory_amount": 0,
@@ -158,7 +158,8 @@
       "inventory_quantity": 4,
       "quantity_difference": 0,
       "purchase_amount": 0,
-      "sales_amount": 3000
+      "sales_amount": 3000,
+      "gross_profit": 920
     },
     {
       "product_id": 1003,
@@ -179,7 +180,6 @@
       "period_sales_quantity": 3,
       "period_sales_amount": 1500,
       "fifo_sales_cost_amount": 900,
-      "gross_profit": 600,
       "ending_signed_stock_quantity": 0,
       "ending_normal_stock_quantity": 0,
       "ending_fifo_inventory_amount": 0,
@@ -199,7 +199,8 @@
       "inventory_quantity": 0,
       "quantity_difference": 0,
       "purchase_amount": 900,
-      "sales_amount": 1500
+      "sales_amount": 1500,
+      "gross_profit": 600
     },
     {
       "product_id": 1004,
@@ -218,7 +219,6 @@
       "period_sales_quantity": 0,
       "period_sales_amount": 0,
       "fifo_sales_cost_amount": 0,
-      "gross_profit": 0,
       "ending_signed_stock_quantity": 0,
       "ending_normal_stock_quantity": 0,
       "ending_fifo_inventory_amount": 0,
@@ -238,7 +238,8 @@
       "inventory_quantity": 4,
       "quantity_difference": 1,
       "purchase_amount": 0,
-      "sales_amount": 0
+      "sales_amount": 0,
+      "gross_profit": 0
     },
     {
       "product_id": 1005,
@@ -257,7 +258,6 @@
       "period_sales_quantity": 4,
       "period_sales_amount": 600,
       "fifo_sales_cost_amount": 200,
-      "gross_profit": 400,
       "ending_signed_stock_quantity": 8,
       "ending_normal_stock_quantity": 8,
       "ending_fifo_inventory_amount": 420,
@@ -272,6 +272,7 @@
       "quantity_reconciliation_status": "match",
       "remaining_cost_layers": [
         {
+          "layer_id": "1005|2026-05-10|7|8|1",
           "product_id": 1005,
           "purchase_date": "2026-05-10",
           "voucher": 7,
@@ -283,6 +284,7 @@
           "remaining_amount": 300
         },
         {
+          "layer_id": "1005|2026-05-11|8|9|2",
           "product_id": 1005,
           "purchase_date": "2026-05-11",
           "voucher": 8,
@@ -300,7 +302,8 @@
       "inventory_quantity": 8,
       "quantity_difference": 0,
       "purchase_amount": 620,
-      "sales_amount": 600
+      "sales_amount": 600,
+      "gross_profit": 400
     },
     {
       "product_id": 1006,
@@ -319,7 +322,6 @@
       "period_sales_quantity": 2,
       "period_sales_amount": 360,
       "fifo_sales_cost_amount": 160,
-      "gross_profit": 200,
       "ending_signed_stock_quantity": 8,
       "ending_normal_stock_quantity": 8,
       "ending_fifo_inventory_amount": 640,
@@ -334,6 +336,7 @@
       "quantity_reconciliation_status": "match",
       "remaining_cost_layers": [
         {
+          "layer_id": "1006|2026-05-10|9|10|1",
           "product_id": 1006,
           "purchase_date": "2026-05-10",
           "voucher": 9,
@@ -351,7 +354,8 @@
       "inventory_quantity": 8,
       "quantity_difference": 0,
       "purchase_amount": 800,
-      "sales_amount": 360
+      "sales_amount": 360,
+      "gross_profit": 200
     },
     {
       "product_id": 1007,
@@ -370,7 +374,6 @@
       "period_sales_quantity": 5,
       "period_sales_amount": 500,
       "fifo_sales_cost_amount": 0,
-      "gross_profit": 500,
       "ending_signed_stock_quantity": -5,
       "ending_normal_stock_quantity": 0,
       "ending_fifo_inventory_amount": 0,
@@ -390,7 +393,8 @@
       "inventory_quantity": -5,
       "quantity_difference": 0,
       "purchase_amount": 0,
-      "sales_amount": 500
+      "sales_amount": 500,
+      "gross_profit": 500
     }
   ],
   "sales_allocations": [
@@ -408,6 +412,7 @@
       "canceled_quantity": 0,
       "allocations": [
         {
+          "layer_id": "1001|2026-05-01|1|2|1",
           "purchase_date": "2026-05-01",
           "purchase_voucher": 1,
           "purchase_excel_row": 2,
@@ -421,6 +426,7 @@
       "fifo_cost_amount": 400,
       "unconfirmed_quantity": 0,
       "backfilled_quantity": 0,
+      "backfilled_amount": 0,
       "cost_status": "confirmed",
       "in_analysis_period": false
     },
@@ -438,6 +444,7 @@
       "canceled_quantity": 0,
       "allocations": [
         {
+          "layer_id": "1001|2026-05-01|1|2|1",
           "purchase_date": "2026-05-01",
           "purchase_voucher": 1,
           "purchase_excel_row": 2,
@@ -448,6 +455,7 @@
           "allocation_source": "period_fifo"
         },
         {
+          "layer_id": "1001|2026-05-10|2|3|2",
           "purchase_date": "2026-05-10",
           "purchase_voucher": 2,
           "purchase_excel_row": 3,
@@ -461,6 +469,7 @@
       "fifo_cost_amount": 840,
       "unconfirmed_quantity": 0,
       "backfilled_quantity": 0,
+      "backfilled_amount": 0,
       "cost_status": "confirmed",
       "in_analysis_period": true
     },
@@ -478,6 +487,7 @@
       "canceled_quantity": 0,
       "allocations": [
         {
+          "layer_id": "1003|2026-05-10|6|7|1",
           "purchase_date": "2026-05-10",
           "purchase_voucher": 6,
           "purchase_excel_row": 7,
@@ -491,6 +501,7 @@
       "fifo_cost_amount": 900,
       "unconfirmed_quantity": 0,
       "backfilled_quantity": 0,
+      "backfilled_amount": 0,
       "cost_status": "confirmed",
       "in_analysis_period": true
     },
@@ -508,6 +519,7 @@
       "canceled_quantity": 2,
       "allocations": [
         {
+          "layer_id": "1006|2026-05-10|9|10|1",
           "purchase_date": "2026-05-10",
           "purchase_voucher": 9,
           "purchase_excel_row": 10,
@@ -521,6 +533,7 @@
       "fifo_cost_amount": 160,
       "unconfirmed_quantity": 0,
       "backfilled_quantity": 0,
+      "backfilled_amount": 0,
       "cost_status": "confirmed",
       "in_analysis_period": true
     },
@@ -538,6 +551,7 @@
       "canceled_quantity": 0,
       "allocations": [
         {
+          "layer_id": "1002|2026-05-21|4|5|1",
           "purchase_date": "2026-05-21",
           "purchase_voucher": 4,
           "purchase_excel_row": 5,
@@ -548,6 +562,7 @@
           "allocation_source": "backfill"
         },
         {
+          "layer_id": "1002|2026-05-22|5|6|2",
           "purchase_date": "2026-05-22",
           "purchase_voucher": 5,
           "purchase_excel_row": 6,
@@ -561,6 +576,7 @@
       "fifo_cost_amount": 2080,
       "unconfirmed_quantity": 0,
       "backfilled_quantity": 10,
+      "backfilled_amount": 2080,
       "cost_status": "backfilled",
       "in_analysis_period": true
     },
@@ -580,6 +596,7 @@
       "fifo_cost_amount": 0,
       "unconfirmed_quantity": 0,
       "backfilled_quantity": 0,
+      "backfilled_amount": 0,
       "cost_status": "confirmed",
       "in_analysis_period": true
     },
@@ -597,6 +614,7 @@
       "canceled_quantity": 0,
       "allocations": [
         {
+          "layer_id": "1005|2026-05-10|7|8|1",
           "purchase_date": "2026-05-10",
           "purchase_voucher": 7,
           "purchase_excel_row": 8,
@@ -610,6 +628,7 @@
       "fifo_cost_amount": 200,
       "unconfirmed_quantity": 0,
       "backfilled_quantity": 0,
+      "backfilled_amount": 0,
       "cost_status": "confirmed",
       "in_analysis_period": true
     },
@@ -629,6 +648,7 @@
       "fifo_cost_amount": 0,
       "unconfirmed_quantity": 5,
       "backfilled_quantity": 0,
+      "backfilled_amount": 0,
       "cost_status": "unconfirmed",
       "in_analysis_period": true
     },
@@ -646,6 +666,7 @@
       "canceled_quantity": 0,
       "allocations": [
         {
+          "layer_id": "1001|2026-05-10|2|3|2",
           "purchase_date": "2026-05-10",
           "purchase_voucher": 2,
           "purchase_excel_row": 3,
@@ -656,6 +677,7 @@
           "allocation_source": "period_fifo"
         },
         {
+          "layer_id": "1001|2026-05-15|3|4|3",
           "purchase_date": "2026-05-15",
           "purchase_voucher": 3,
           "purchase_excel_row": 4,
@@ -669,8 +691,447 @@
       "fifo_cost_amount": 780,
       "unconfirmed_quantity": 0,
       "backfilled_quantity": 0,
+      "backfilled_amount": 0,
       "cost_status": "confirmed",
       "in_analysis_period": true
+    }
+  ],
+  "sales_cost_events": [
+    {
+      "transaction_id": "2026-05-05|1|2",
+      "date": "2026-05-05",
+      "voucher": 1,
+      "excel_row": 2,
+      "product_id": 1001,
+      "quantity": 4,
+      "cost_amount": 400,
+      "event_type": "sale",
+      "unconfirmed_quantity": 0,
+      "inventory_cost_amount": 400,
+      "cost_allocations": [
+        {
+          "layer_id": "1001|2026-05-01|1|2|1",
+          "purchase_date": "2026-05-01",
+          "purchase_voucher": 1,
+          "purchase_excel_row": 2,
+          "purchase_quantity": 4,
+          "unit_cost": 100,
+          "cost_amount": 400,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        }
+      ]
+    },
+    {
+      "transaction_id": "2026-05-10|2|3",
+      "date": "2026-05-10",
+      "voucher": 2,
+      "excel_row": 3,
+      "product_id": 1001,
+      "quantity": 8,
+      "cost_amount": 840,
+      "event_type": "sale",
+      "unconfirmed_quantity": 0,
+      "inventory_cost_amount": 840,
+      "cost_allocations": [
+        {
+          "layer_id": "1001|2026-05-01|1|2|1",
+          "purchase_date": "2026-05-01",
+          "purchase_voucher": 1,
+          "purchase_excel_row": 2,
+          "purchase_quantity": 6,
+          "unit_cost": 100,
+          "cost_amount": 600,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        },
+        {
+          "layer_id": "1001|2026-05-10|2|3|2",
+          "purchase_date": "2026-05-10",
+          "purchase_voucher": 2,
+          "purchase_excel_row": 3,
+          "purchase_quantity": 2,
+          "unit_cost": 120,
+          "cost_amount": 240,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        }
+      ]
+    },
+    {
+      "transaction_id": "2026-05-20|3|4",
+      "date": "2026-05-20",
+      "voucher": 3,
+      "excel_row": 4,
+      "product_id": 1001,
+      "quantity": 6,
+      "cost_amount": 780,
+      "event_type": "sale",
+      "unconfirmed_quantity": 0,
+      "inventory_cost_amount": 780,
+      "cost_allocations": [
+        {
+          "layer_id": "1001|2026-05-10|2|3|2",
+          "purchase_date": "2026-05-10",
+          "purchase_voucher": 2,
+          "purchase_excel_row": 3,
+          "purchase_quantity": 4,
+          "unit_cost": 120,
+          "cost_amount": 480,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        },
+        {
+          "layer_id": "1001|2026-05-15|3|4|3",
+          "purchase_date": "2026-05-15",
+          "purchase_voucher": 3,
+          "purchase_excel_row": 4,
+          "purchase_quantity": 2,
+          "unit_cost": 150,
+          "cost_amount": 300,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        }
+      ]
+    },
+    {
+      "transaction_id": "2026-05-12|4|5",
+      "date": "2026-05-12",
+      "voucher": 4,
+      "excel_row": 5,
+      "product_id": 1002,
+      "quantity": 10,
+      "cost_amount": 2080,
+      "event_type": "sale",
+      "unconfirmed_quantity": 0,
+      "inventory_cost_amount": 0,
+      "cost_allocations": [
+        {
+          "layer_id": "1002|2026-05-21|4|5|1",
+          "purchase_date": "2026-05-21",
+          "purchase_voucher": 4,
+          "purchase_excel_row": 5,
+          "purchase_quantity": 6,
+          "unit_cost": 200,
+          "cost_amount": 1200,
+          "backfilled": true,
+          "allocation_source": "backfill"
+        },
+        {
+          "layer_id": "1002|2026-05-22|5|6|2",
+          "purchase_date": "2026-05-22",
+          "purchase_voucher": 5,
+          "purchase_excel_row": 6,
+          "purchase_quantity": 4,
+          "unit_cost": 220,
+          "cost_amount": 880,
+          "backfilled": true,
+          "allocation_source": "backfill"
+        }
+      ]
+    },
+    {
+      "transaction_id": "2026-05-10|5|6",
+      "date": "2026-05-10",
+      "voucher": 5,
+      "excel_row": 6,
+      "product_id": 1003,
+      "quantity": 3,
+      "cost_amount": 900,
+      "event_type": "sale",
+      "unconfirmed_quantity": 0,
+      "inventory_cost_amount": 900,
+      "cost_allocations": [
+        {
+          "layer_id": "1003|2026-05-10|6|7|1",
+          "purchase_date": "2026-05-10",
+          "purchase_voucher": 6,
+          "purchase_excel_row": 7,
+          "purchase_quantity": 3,
+          "unit_cost": 300,
+          "cost_amount": 900,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        }
+      ]
+    },
+    {
+      "transaction_id": "2026-05-13|6|7",
+      "date": "2026-05-13",
+      "voucher": 6,
+      "excel_row": 7,
+      "product_id": 1005,
+      "quantity": 4,
+      "cost_amount": 200,
+      "event_type": "sale",
+      "unconfirmed_quantity": 0,
+      "inventory_cost_amount": 200,
+      "cost_allocations": [
+        {
+          "layer_id": "1005|2026-05-10|7|8|1",
+          "purchase_date": "2026-05-10",
+          "purchase_voucher": 7,
+          "purchase_excel_row": 8,
+          "purchase_quantity": 4,
+          "unit_cost": 50,
+          "cost_amount": 200,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        }
+      ]
+    },
+    {
+      "transaction_id": "2026-05-11|7|8",
+      "date": "2026-05-11",
+      "voucher": 7,
+      "excel_row": 8,
+      "product_id": 1006,
+      "quantity": 4,
+      "cost_amount": 320,
+      "event_type": "sale",
+      "unconfirmed_quantity": 0,
+      "inventory_cost_amount": 320,
+      "cost_allocations": [
+        {
+          "layer_id": "1006|2026-05-10|9|10|1",
+          "purchase_date": "2026-05-10",
+          "purchase_voucher": 9,
+          "purchase_excel_row": 10,
+          "purchase_quantity": 4,
+          "unit_cost": 80,
+          "cost_amount": 320,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        }
+      ]
+    },
+    {
+      "transaction_id": "2026-05-12|8|9",
+      "date": "2026-05-12",
+      "voucher": 8,
+      "excel_row": 9,
+      "product_id": 1006,
+      "quantity": 3,
+      "cost_amount": 240,
+      "event_type": "sale",
+      "unconfirmed_quantity": 0,
+      "inventory_cost_amount": 240,
+      "cost_allocations": [
+        {
+          "layer_id": "1006|2026-05-10|9|10|1",
+          "purchase_date": "2026-05-10",
+          "purchase_voucher": 9,
+          "purchase_excel_row": 10,
+          "purchase_quantity": 3,
+          "unit_cost": 80,
+          "cost_amount": 240,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        }
+      ]
+    },
+    {
+      "transaction_id": "2026-05-15|9|10",
+      "date": "2026-05-15",
+      "voucher": 9,
+      "excel_row": 10,
+      "product_id": 1006,
+      "quantity": -5,
+      "cost_amount": -400,
+      "event_type": "sale_cancellation",
+      "unconfirmed_quantity": 0,
+      "inventory_cost_amount": 400,
+      "restoration_details": [
+        {
+          "sale_id": "2026-05-12|8|9",
+          "quantity": 3,
+          "unconfirmed_quantity": 0,
+          "restored_allocations": [
+            {
+              "layer_id": "1006|2026-05-10|9|10|1",
+              "purchase_date": "2026-05-10",
+              "purchase_voucher": 9,
+              "purchase_excel_row": 10,
+              "quantity": 3,
+              "unit_cost": 80,
+              "amount": 240
+            }
+          ]
+        },
+        {
+          "sale_id": "2026-05-11|7|8",
+          "quantity": 2,
+          "unconfirmed_quantity": 0,
+          "restored_allocations": [
+            {
+              "layer_id": "1006|2026-05-10|9|10|1",
+              "purchase_date": "2026-05-10",
+              "purchase_voucher": 9,
+              "purchase_excel_row": 10,
+              "quantity": 2,
+              "unit_cost": 80,
+              "amount": 160
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "transaction_id": "2026-05-14|10|11",
+      "date": "2026-05-14",
+      "voucher": 10,
+      "excel_row": 11,
+      "product_id": 1007,
+      "quantity": 5,
+      "cost_amount": 0,
+      "event_type": "sale",
+      "unconfirmed_quantity": 5,
+      "inventory_cost_amount": 0,
+      "cost_allocations": []
+    }
+  ],
+  "purchase_cost_events": [
+    {
+      "transaction_id": "2026-05-01|1|2",
+      "date": "2026-05-01",
+      "voucher": 1,
+      "excel_row": 2,
+      "product_id": 1001,
+      "quantity": 10,
+      "cost_amount": 1000,
+      "event_type": "purchase",
+      "layer_id": "1001|2026-05-01|1|2|1",
+      "post_period_end": false
+    },
+    {
+      "transaction_id": "2026-05-10|2|3",
+      "date": "2026-05-10",
+      "voucher": 2,
+      "excel_row": 3,
+      "product_id": 1001,
+      "quantity": 6,
+      "cost_amount": 720,
+      "event_type": "purchase",
+      "layer_id": "1001|2026-05-10|2|3|2",
+      "post_period_end": false
+    },
+    {
+      "transaction_id": "2026-05-15|3|4",
+      "date": "2026-05-15",
+      "voucher": 3,
+      "excel_row": 4,
+      "product_id": 1001,
+      "quantity": 5,
+      "cost_amount": 750,
+      "event_type": "purchase",
+      "layer_id": "1001|2026-05-15|3|4|3",
+      "post_period_end": false
+    },
+    {
+      "transaction_id": "2026-05-21|4|5",
+      "date": "2026-05-21",
+      "voucher": 4,
+      "excel_row": 5,
+      "product_id": 1002,
+      "quantity": 6,
+      "cost_amount": 1200,
+      "event_type": "purchase",
+      "layer_id": "1002|2026-05-21|4|5|1",
+      "post_period_end": true
+    },
+    {
+      "transaction_id": "2026-05-22|5|6",
+      "date": "2026-05-22",
+      "voucher": 5,
+      "excel_row": 6,
+      "product_id": 1002,
+      "quantity": 10,
+      "cost_amount": 2200,
+      "event_type": "purchase",
+      "layer_id": "1002|2026-05-22|5|6|2",
+      "post_period_end": true
+    },
+    {
+      "transaction_id": "2026-05-10|6|7",
+      "date": "2026-05-10",
+      "voucher": 6,
+      "excel_row": 7,
+      "product_id": 1003,
+      "quantity": 3,
+      "cost_amount": 900,
+      "event_type": "purchase",
+      "layer_id": "1003|2026-05-10|6|7|1",
+      "post_period_end": false
+    },
+    {
+      "transaction_id": "2026-05-22|11|12",
+      "date": "2026-05-22",
+      "voucher": 11,
+      "excel_row": 12,
+      "product_id": 1004,
+      "quantity": 5,
+      "cost_amount": 200,
+      "event_type": "purchase",
+      "layer_id": "1004|2026-05-22|11|12|1",
+      "post_period_end": true
+    },
+    {
+      "transaction_id": "2026-05-10|7|8",
+      "date": "2026-05-10",
+      "voucher": 7,
+      "excel_row": 8,
+      "product_id": 1005,
+      "quantity": 10,
+      "cost_amount": 500,
+      "event_type": "purchase",
+      "layer_id": "1005|2026-05-10|7|8|1",
+      "post_period_end": false
+    },
+    {
+      "transaction_id": "2026-05-11|8|9",
+      "date": "2026-05-11",
+      "voucher": 8,
+      "excel_row": 9,
+      "product_id": 1005,
+      "quantity": 5,
+      "cost_amount": 300,
+      "event_type": "purchase",
+      "layer_id": "1005|2026-05-11|8|9|2",
+      "post_period_end": false
+    },
+    {
+      "transaction_id": "2026-05-12|10|11",
+      "date": "2026-05-12",
+      "voucher": 10,
+      "excel_row": 11,
+      "product_id": 1005,
+      "quantity": -3,
+      "cost_amount": -180,
+      "event_type": "purchase_cancellation",
+      "allocations": [
+        {
+          "layer_id": "1005|2026-05-11|8|9|2",
+          "purchase_date": "2026-05-11",
+          "purchase_voucher": 8,
+          "purchase_excel_row": 9,
+          "quantity": 3,
+          "unit_cost": 60,
+          "amount": 180
+        }
+      ],
+      "post_period_end": false
+    },
+    {
+      "transaction_id": "2026-05-10|9|10",
+      "date": "2026-05-10",
+      "voucher": 9,
+      "excel_row": 10,
+      "product_id": 1006,
+      "quantity": 10,
+      "cost_amount": 800,
+      "event_type": "purchase",
+      "layer_id": "1006|2026-05-10|9|10|1",
+      "post_period_end": false
     }
   ],
   "unconfirmed_shipments": [
@@ -690,6 +1151,7 @@
       "fifo_cost_amount": 0,
       "unconfirmed_quantity": 5,
       "backfilled_quantity": 0,
+      "backfilled_amount": 0,
       "cost_status": "unconfirmed",
       "in_analysis_period": true
     }
@@ -698,6 +1160,7 @@
     {
       "sale_id": "2026-05-12|4|5",
       "product_id": 1002,
+      "layer_id": "1002|2026-05-21|4|5|1",
       "purchase_date": "2026-05-21",
       "purchase_voucher": 4,
       "purchase_excel_row": 5,
@@ -710,6 +1173,7 @@
     {
       "sale_id": "2026-05-12|4|5",
       "product_id": 1002,
+      "layer_id": "1002|2026-05-22|5|6|2",
       "purchase_date": "2026-05-22",
       "purchase_voucher": 5,
       "purchase_excel_row": 6,
@@ -730,6 +1194,7 @@
       "requested_quantity": 3,
       "allocations": [
         {
+          "layer_id": "1005|2026-05-11|8|9|2",
           "purchase_date": "2026-05-11",
           "purchase_voucher": 8,
           "purchase_excel_row": 9,
@@ -753,11 +1218,13 @@
           "unconfirmed_quantity": 0,
           "restored_allocations": [
             {
+              "layer_id": "1006|2026-05-10|9|10|1",
               "purchase_date": "2026-05-10",
               "purchase_voucher": 9,
               "purchase_excel_row": 10,
               "quantity": 3,
-              "unit_cost": 80
+              "unit_cost": 80,
+              "amount": 240
             }
           ]
         },
@@ -767,11 +1234,13 @@
           "unconfirmed_quantity": 0,
           "restored_allocations": [
             {
+              "layer_id": "1006|2026-05-10|9|10|1",
               "purchase_date": "2026-05-10",
               "purchase_voucher": 9,
               "purchase_excel_row": 10,
               "quantity": 2,
-              "unit_cost": 80
+              "unit_cost": 80,
+              "amount": 160
             }
           ]
         }
@@ -825,7 +1294,6 @@
       "period_sales_quantity": 10,
       "period_sales_amount": 3000,
       "fifo_sales_cost_amount": 2080,
-      "gross_profit": 920,
       "ending_signed_stock_quantity": -10,
       "ending_normal_stock_quantity": 0,
       "ending_fifo_inventory_amount": 0,
@@ -845,7 +1313,8 @@
       "inventory_quantity": 4,
       "quantity_difference": 0,
       "purchase_amount": 0,
-      "sales_amount": 3000
+      "sales_amount": 3000,
+      "gross_profit": 920
     },
     {
       "product_id": 1007,
@@ -864,7 +1333,6 @@
       "period_sales_quantity": 5,
       "period_sales_amount": 500,
       "fifo_sales_cost_amount": 0,
-      "gross_profit": 500,
       "ending_signed_stock_quantity": -5,
       "ending_normal_stock_quantity": 0,
       "ending_fifo_inventory_amount": 0,
@@ -884,7 +1352,8 @@
       "inventory_quantity": -5,
       "quantity_difference": 0,
       "purchase_amount": 0,
-      "sales_amount": 500
+      "sales_amount": 500,
+      "gross_profit": 500
     }
   ],
   "inventory_negative_stock": [
@@ -905,7 +1374,6 @@
       "period_sales_quantity": 5,
       "period_sales_amount": 500,
       "fifo_sales_cost_amount": 0,
-      "gross_profit": 500,
       "ending_signed_stock_quantity": -5,
       "ending_normal_stock_quantity": 0,
       "ending_fifo_inventory_amount": 0,
@@ -925,7 +1393,8 @@
       "inventory_quantity": -5,
       "quantity_difference": 0,
       "purchase_amount": 0,
-      "sales_amount": 500
+      "sales_amount": 500,
+      "gross_profit": 500
     }
   ],
   "quantity_mismatches": [
@@ -946,7 +1415,6 @@
       "period_sales_quantity": 0,
       "period_sales_amount": 0,
       "fifo_sales_cost_amount": 0,
-      "gross_profit": 0,
       "ending_signed_stock_quantity": 0,
       "ending_normal_stock_quantity": 0,
       "ending_fifo_inventory_amount": 0,
@@ -966,7 +1434,8 @@
       "inventory_quantity": 4,
       "quantity_difference": 1,
       "purchase_amount": 0,
-      "sales_amount": 0
+      "sales_amount": 0,
+      "gross_profit": 0
     },
     {
       "product_id": 1007,
@@ -985,7 +1454,6 @@
       "period_sales_quantity": 5,
       "period_sales_amount": 500,
       "fifo_sales_cost_amount": 0,
-      "gross_profit": 500,
       "ending_signed_stock_quantity": -5,
       "ending_normal_stock_quantity": 0,
       "ending_fifo_inventory_amount": 0,
@@ -1005,7 +1473,8 @@
       "inventory_quantity": -5,
       "quantity_difference": 0,
       "purchase_amount": 0,
-      "sales_amount": 500
+      "sales_amount": 500,
+      "gross_profit": 500
     }
   ]
 }

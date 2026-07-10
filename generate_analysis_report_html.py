@@ -58,29 +58,34 @@ def _replace_between(
 
 
 def render_amount_balance_chart(
+    opening_amount: int | float,
     purchase_amount: int | float,
     sales_amount: int | float,
     inventory_amount: int | float,
-    remainder_amount: int | float,
+    backfill_amount: int | float,
+    gross_profit: int | float,
 ) -> str:
-    """Render the balance chart while naming the residual as a reconciliation amount."""
-    chart = _base.render_amount_balance_chart(
-        purchase_amount,
-        sales_amount,
-        inventory_amount,
-        remainder_amount,
-    )
-    replacements = (
-        ("매입·매출·재고·이익", "매입·매출·재고·대사 잔여금액"),
-        ("매출과 재고의 합계, 이익과 매입의 합계", "매출과 재고의 합계, 대사 잔여금액과 매입의 합계"),
-        ("오른쪽은 이익금액 위에 매입금액을", "오른쪽은 대사 잔여금액 위에 매입금액을"),
-        (">이익</text>", ">대사 잔여</text>"),
-        (">이익 + 매입</text>", ">대사 잔여 + 매입</text>"),
-        (">남는 금액과 투입액</text>", ">대사 차이와 투입액</text>"),
-    )
-    for old, new in replacements:
-        chart = chart.replace(old, new)
-    return chart
+    """Render the stated FIFO identity rather than a misleading four-block residual."""
+    left_total = sales_amount + inventory_amount
+    right_total = opening_amount + purchase_amount + backfill_amount + gross_profit
+    if any(value < 0 for value in (sales_amount, inventory_amount, opening_amount, purchase_amount, backfill_amount, gross_profit)):
+        return '<div class="balance-chart-empty" role="note">원가 미확정·오류 또는 음수 이익이 있어 금액 밸런스 차트는 확정값으로 표시하지 않는다.</div>'
+    if round(left_total) != round(right_total):
+        return f'<div class="balance-chart-empty" role="note">금액 밸런스 불일치: 왼쪽 {_base.money(left_total)}원 / 오른쪽 {_base.money(right_total)}원</div>'
+    total = left_total or 1
+    def segments(x: int, values: list[tuple[str, int | float]], color: str) -> str:
+        y, result = 302.0, []
+        for label, value in values:
+            height = value / total * 220
+            y -= height
+            result.append(f'<rect x="{x}" y="{y:.1f}" width="190" height="{height:.1f}" rx="3" fill="{color}" opacity=".82"></rect><text x="{x + 95}" y="{y + height / 2:.1f}" text-anchor="middle">{escape(label)} {_base.money(value)}원</text>')
+        return "".join(result)
+    return f'''<div class="chart-wrap balance-chart-wrap" aria-label="금액 대사 밸런스 블록 차트">
+      <svg id="amount-balance-chart" viewBox="0 0 980 410" role="img"><title>FIFO 금액 밸런스 차트</title><desc>매출과 종료일 FIFO 재고는 기초재고, 기간 순매입원가, 후속 소급배정원가 및 매출총이익의 합계와 같다.</desc>
+      <text x="490" y="34" text-anchor="middle">양쪽 합계 {_base.money(left_total)}원</text>
+      {segments(170, [('매출', sales_amount), ('종료일 재고', inventory_amount)], '#2f6f7e')}
+      {segments(620, [('기초재고', opening_amount), ('기간 순매입', purchase_amount), ('후속 소급배정', backfill_amount), ('매출총이익', gross_profit)], '#c47a23')}
+      <text x="265" y="350" text-anchor="middle">매출 + 종료일 FIFO 재고</text><text x="715" y="350" text-anchor="middle">기초재고 + 매입 + 소급배정 + 이익</text></svg></div>'''
 
 
 def weekly_inventory_flow_rows(
@@ -125,23 +130,43 @@ def weekly_inventory_flow_rows(
     if not date_starts or not date_ends:
         return []
 
-    fifo_costs = {
-        row["sale_id"]: float(row.get("fifo_cost_amount") or 0)
-        for row in (reconciliation or {}).get("sales_allocations", [])
-        if row.get("in_analysis_period")
-    }
-    sales_df["sale_id"] = sales_df.apply(
-        lambda row: f"{row.get('date').date().isoformat()}|{row.get('voucher')}|{row.get('excel_row')}", axis=1
-    ) if not sales_df.empty else pd.Series(dtype="object")
-    sales_df["fifo_cost"] = sales_df["sale_id"].map(fifo_costs).fillna(0) if not sales_df.empty else pd.Series(dtype="float64")
-    purchase_df["purchase_cost"] = purchase_df["quantity"] * purchase_df.get("unit_price", 0) if "unit_price" in purchase_df else purchase_df["supply_amount"]
+    purchase_events = pd.DataFrame((reconciliation or {}).get("purchase_cost_events", [])).copy()
+    sales_events = pd.DataFrame((reconciliation or {}).get("sales_cost_events", [])).copy()
+    for frame in (purchase_events, sales_events):
+        if "date" not in frame:
+            frame["date"] = pd.Series(dtype="datetime64[ns]")
+        frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+        frame.dropna(subset=["date"], inplace=True)
+        if period_start and period_end:
+            frame.drop(frame[(frame["date"] < pd.Timestamp(period_start)) | (frame["date"] > pd.Timestamp(period_end))].index, inplace=True)
+    if purchase_events.empty:
+        purchase_df["purchase_cost"] = purchase_df["quantity"] * purchase_df.get("unit_price", 0) if "unit_price" in purchase_df else purchase_df["supply_amount"]
+    else:
+        purchase_events["purchase_cost"] = pd.to_numeric(purchase_events["cost_amount"], errors="coerce").fillna(0)
+    if sales_events.empty:
+        fifo_costs = {
+            row["sale_id"]: float(row.get("fifo_cost_amount") or 0)
+            for row in (reconciliation or {}).get("sales_allocations", [])
+            if row.get("in_analysis_period")
+        }
+        sales_df["sale_id"] = sales_df.apply(
+            lambda row: f"{row.get('date').date().isoformat()}|{row.get('voucher')}|{row.get('excel_row')}", axis=1
+        ) if not sales_df.empty else pd.Series(dtype="object")
+        sales_df["outbound_cost"] = sales_df["sale_id"].map(fifo_costs).fillna(0) if not sales_df.empty else 0.0
+        sales_df["inventory_cost_delta"] = -sales_df["outbound_cost"]
+    else:
+        sales_events["inventory_cost_amount"] = pd.to_numeric(sales_events.get("inventory_cost_amount", 0), errors="coerce").fillna(0)
+        sales_events["cost_amount"] = pd.to_numeric(sales_events["cost_amount"], errors="coerce").fillna(0)
+        sales_events["inventory_cost_delta"] = sales_events.apply(lambda row: row["inventory_cost_amount"] if row.get("event_type") == "sale_cancellation" else -row["inventory_cost_amount"], axis=1)
+        sales_events["outbound_cost"] = sales_events.apply(lambda row: -row["cost_amount"] if row.get("event_type") == "sale_cancellation" else row["cost_amount"], axis=1)
 
     daily = pd.DataFrame(index=pd.date_range(min(date_starts), max(date_ends), freq="D"))
-    daily["purchase_increase"] = purchase_df.groupby("date")["purchase_cost"].sum()
+    daily["purchase_increase"] = (purchase_events if not purchase_events.empty else purchase_df).groupby("date")["purchase_cost"].sum()
     daily["sales_amount"] = sales_df.groupby("date")["total_amount"].sum()
-    daily["outbound_cost_estimate"] = sales_df.groupby("date")["fifo_cost"].sum()
+    daily["outbound_cost_estimate"] = sales_events.groupby("date")["outbound_cost"].sum() if not sales_events.empty else sales_df.groupby("date")["outbound_cost"].sum()
     daily = daily.fillna(0)
-    daily["net_change"] = daily["purchase_increase"] - daily["outbound_cost_estimate"]
+    inventory_cost_delta = sales_events.groupby("date")["inventory_cost_delta"].sum() if not sales_events.empty else sales_df.groupby("date")["inventory_cost_delta"].sum()
+    daily["net_change"] = (daily["purchase_increase"] + inventory_cost_delta).fillna(0)
 
     opening_stock_amount = float((reconciliation or {}).get("summary", {}).get("opening_stock_amount", 0))
     daily["estimated_inventory_amount"] = opening_stock_amount + daily["net_change"].cumsum()
@@ -187,6 +212,34 @@ def render_weekly_inventory_flow_table_rows(rows: list[dict[str, Any]]) -> str:
     )
 
 
+def render_problem_item_rows(payload: dict[str, Any]) -> str:
+    error_codes: dict[Any, list[str]] = {}
+    for error in payload.get("errors", []):
+        error_codes.setdefault(error.get("product_id"), []).append(str(error.get("code") or "오류"))
+    problems = [
+        row for row in payload.get("rows", [])
+        if row.get("cost_status") in {"backfilled", "unconfirmed", "error"}
+        or row.get("quantity_reconciliation_status") != "match"
+    ]
+    if not problems:
+        return '<tr><td colspan="10">없음</td></tr>'
+    return "\n".join(
+        "<tr>"
+        f"<td>{escape(str(row.get('product_id') if row.get('product_id') is not None else '-'))}</td>"
+        f"<td>{escape(str(row.get('item_name') or '-'))}</td>"
+        f"<td><code>{escape(str(row.get('cost_status') or '-'))}</code></td>"
+        f"<td class=\"money\">{_base.number(row.get('unconfirmed_quantity') or 0)}</td>"
+        f"<td class=\"money\">{_base.number(row.get('ending_negative_stock_quantity') or 0)}</td>"
+        f"<td class=\"money\">{_base.number(row.get('inventory_book_quantity') or 0)}</td>"
+        f"<td class=\"money\">{_base.number(row.get('inventory_sheet_quantity')) if row.get('inventory_sheet_quantity') is not None else '-'}</td>"
+        f"<td class=\"money\">{_base.number(row.get('inventory_quantity_difference')) if row.get('inventory_quantity_difference') is not None else '-'}</td>"
+        f"<td><code>{escape(str(row.get('quantity_reconciliation_status') or '-'))}</code></td>"
+        f"<td>{escape(', '.join(error_codes.get(row.get('product_id'), [])) or '-')}</td>"
+        "</tr>"
+        for row in problems
+    )
+
+
 def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = None) -> str:
     spec = spec or _base.load_report_spec()
     base_spec = copy.deepcopy(spec)
@@ -207,7 +260,10 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
             _base.summary_row("분석 기간", reconciliation_payload.get("metadata", {}).get("period_start", _base.period_label(purchase_meta, sales_meta)) + " ~ " + reconciliation_payload.get("metadata", {}).get("period_end", "")),
             _base.summary_row("재고 기준일", reconciliation_payload.get("metadata", {}).get("inventory_date", "-")),
             _base.summary_row("입력 데이터 최종 거래일", reconciliation_payload.get("metadata", {}).get("input_data_last_transaction_date", "-")),
-            _base.summary_row("후속 원가보충 최종 매입일", reconciliation_payload.get("metadata", {}).get("backfill_last_purchase_date", "없음")),
+            _base.summary_row(
+                "후속 원가보충 최종 매입일",
+                reconciliation_payload.get("metadata", {}).get("backfill_last_purchase_date") or "없음",
+            ),
             _base.summary_row(
                 "거래 규모",
                 f"매입 상세 {_base.number(purchase_meta['record_count'])}건 / 매출 상세 {_base.number(sales_meta['record_count'])}건",
@@ -231,7 +287,9 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     purchase_amount = reconciliation.get("period_purchase_cost_amount", reconciliation["purchase_amount"])
     sales_amount = reconciliation["sales_amount"]
     inventory_amount = reconciliation.get("inventory_amount_at_fifo", reconciliation.get("ending_fifo_inventory_amount", 0))
-    reconciliation_remainder = reconciliation.get("remainder_at_fifo", reconciliation.get("gross_profit", 0))
+    reconciliation_remainder = reconciliation.get("gross_profit", 0)
+    opening_amount = reconciliation.get("opening_stock_amount", 0)
+    backfill_amount = reconciliation.get("backfilled_amount", 0)
     fifo_sales_cost = reconciliation.get("fifo_sales_cost_amount", 0)
     status_rows = "".join(
         f"<li><code>{escape(status)}</code>: {_base.number(count)}개 품목</li>"
@@ -241,29 +299,37 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         f"<li>{escape(status)}: {_base.number(count)}개</li>"
         for status, count in reconciliation.get("reconciliation_status_counts", {}).items()
     )
+    problem_rows = render_problem_item_rows(reconciliation_payload)
 
-    original_balance_chart = _base.render_amount_balance_chart(
-        purchase_amount,
-        sales_amount,
-        inventory_amount,
-        reconciliation_remainder,
-    )
-    amount_balance_chart = render_amount_balance_chart(
-        purchase_amount,
-        sales_amount,
-        inventory_amount,
-        reconciliation_remainder,
-    )
-    html = _replace_once(html, original_balance_chart, amount_balance_chart, "amount balance chart")
+    if reconciliation.get("error_count", 0) or reconciliation.get("unconfirmed_quantity", 0):
+        amount_balance_chart = '<div class="balance-chart-empty" role="note">원가 미확정 또는 계산 오류가 있어 금액 밸런스 차트는 잠정값으로만 검토해야 한다.</div>'
+    else:
+        amount_balance_chart = render_amount_balance_chart(
+            opening_amount,
+            purchase_amount,
+            sales_amount,
+            inventory_amount,
+            backfill_amount,
+            reconciliation_remainder,
+        )
+    chart_start = '<div class="chart-wrap balance-chart-wrap" aria-label="금액 대사 밸런스 블록 차트">'
+    chart_end = "      </div>"
+    chart_start_index = html.find(chart_start)
+    chart_end_index = html.find(chart_end, chart_start_index)
+    if chart_start_index < 0 or chart_end_index < 0:
+        raise RuntimeError("amount balance chart replacement marker not found")
+    html = html[:chart_start_index] + amount_balance_chart + html[chart_end_index + len(chart_end):]
 
     amount_rows = [
-        ("총 매입원가", "분석기간 매입수량 × 매입단가", _base.money(purchase_amount)),
+        ("기초재고금액", "분석 시작일 직전 FIFO 잔여 원가층", _base.money(opening_amount)),
+        ("기간 순매입원가", "실제 매입·매입취소 원가 이벤트 합계", _base.money(purchase_amount)),
+        ("후속 매입 소급배정원가", "종료일 이후 매입으로 확정된 미확정 출고 원가", _base.money(backfill_amount)),
         ("총 매출금액", "기간 내 매출 상세 합계", _base.money(sales_amount)),
         ("FIFO 매출원가", "각 매출에 실제 배정된 FIFO 원가층 합계", _base.money(fifo_sales_cost)),
         ("FIFO 재고금액", "분석 종료일 정상 잔여 원가층 합계", _base.money(inventory_amount)),
         (
             "매출총이익",
-            "매출금액 + FIFO 재고금액 - 매입원가",
+            "매출금액 - FIFO 매출원가",
             _base.money(reconciliation_remainder),
         ),
     ]
@@ -344,6 +410,10 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
           <p class="section-note">장부상 계산수량과 재고 시트의 stock_quantity만 비교했다. 재고 시트 단가는 사용하지 않았다.</p>
           <ul>{reconciliation_rows}</ul>
           <p class="section-note">불일치 품목 {_base.number(reconciliation.get('quantity_reconciliation_mismatch_count', 0))}개</p>
+        </section>
+        <section aria-labelledby="problem-items-title">
+          <h3 id="problem-items-title">문제 품목 상세</h3>
+          <div class="table-scroll"><table><thead><tr><th>product_id</th><th>품명</th><th>원가 상태</th><th>미확정 수량</th><th>종료일 음수재고</th><th>기준일 장부수량</th><th>재고 시트 수량</th><th>수량 차이</th><th>수량 대사 상태</th><th>오류/경고</th></tr></thead><tbody>{problem_rows}</tbody></table></div>
         </section>
       </section>
     </article>
