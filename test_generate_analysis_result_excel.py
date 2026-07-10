@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import re
 import shutil
 import tempfile
 import unittest
@@ -24,6 +25,21 @@ class GenerateAnalysisResultExcelTests(unittest.TestCase):
         export_workbook(sources or load_sources(EXAMPLE_DIR), output)
         self.addCleanup(tempdir.cleanup)
         return output, load_workbook(output, data_only=False)
+
+    @staticmethod
+    def _labeled_row(workbook, sheet_name: str, label: str):
+        for row in workbook[sheet_name].iter_rows(min_col=1, max_col=3):
+            if row[0].value == label:
+                return row
+        raise AssertionError(f"{label!r} was not found in {sheet_name}")
+
+    @staticmethod
+    def _header_column(workbook, sheet_name: str, header: str):
+        for row in workbook[sheet_name].iter_rows():
+            for cell in row:
+                if cell.value == header:
+                    return cell.row, cell.column
+        raise AssertionError(f"{header!r} header was not found in {sheet_name}")
 
     def test_creates_reopenable_workbook_with_required_sheet_order_and_json_record_counts(self):
         output, workbook = self._create_workbook()
@@ -81,6 +97,69 @@ class GenerateAnalysisResultExcelTests(unittest.TestCase):
                 chart_xml = archive.read(chart_file).decode("utf-8")
                 self.assertIn("!$", chart_xml)
                 self.assertNotIn("[", chart_xml)
+
+    def test_rate_cells_keep_their_distinct_ratio_and_percentage_point_contracts(self):
+        sources = copy.deepcopy(load_sources(EXAMPLE_DIR))
+        sources["reconciliation"]["summary"]["gross_profit_status"] = "confirmed"
+        output, workbook = self._create_workbook(sources)
+
+        summary_rate = self._labeled_row(workbook, "요약", "매출총이익률")[1]
+        profit_rate = self._labeled_row(workbook, "손익분석", "매출총이익률")[1]
+        self.assertAlmostEqual(summary_rate.value, 4500 / 9460)
+        self.assertEqual(summary_rate.number_format, "0.0%")
+        self.assertEqual(profit_rate.number_format, "0.0%")
+
+        weekly_header_row, weekly_rate_column = self._header_column(workbook, "손익분석", "margin_rate")
+        weekly_rate = workbook["손익분석"].cell(weekly_header_row + 1, weekly_rate_column)
+        self.assertAlmostEqual(weekly_rate.value, 50.285714285714285)
+        self.assertEqual(weekly_rate.number_format, "0.0\\%")
+
+        principal_header_row, principal_rate_column = self._header_column(workbook, "매출분석", "margin_rate")
+        principal_rate = workbook["매출분석"].cell(principal_header_row + 1, principal_rate_column)
+        self.assertAlmostEqual(principal_rate.value, 33.77777777777778)
+        self.assertEqual(principal_rate.number_format, "0.0\\%")
+
+        inventory_header_row, inventory_rate_column = self._header_column(workbook, "재고분석", "gross_profit_rate")
+        inventory_rate = workbook["재고분석"].cell(inventory_header_row + 1, inventory_rate_column)
+        self.assertAlmostEqual(inventory_rate.value, 53.714285714285715)
+        self.assertEqual(inventory_rate.number_format, "0.0\\%")
+        self.assertTrue(output.exists())
+
+    def test_charts_include_only_the_requested_non_contiguous_series(self):
+        output, workbook = self._create_workbook()
+        first_chart = workbook["요약"]._charts[0]
+        flow_header_row, purchase_column = self._header_column(workbook, "재고분석", "purchase_increase")
+        sales_column = next(
+            cell.column
+            for cell in workbook["재고분석"][flow_header_row]
+            if cell.value == "sales_amount"
+        )
+        purchase_coordinate = workbook["재고분석"].cell(flow_header_row, purchase_column).coordinate
+        sales_coordinate = workbook["재고분석"].cell(flow_header_row, sales_column).coordinate
+
+        self.assertEqual(len(first_chart.series), 2)
+        title_formulas = [series.tx.strRef.f for series in first_chart.series]
+        value_formulas = [series.val.numRef.f for series in first_chart.series]
+        self.assertEqual([formula.rsplit("!", 1)[1] for formula in title_formulas], [purchase_coordinate, sales_coordinate])
+        self.assertEqual(
+            [re.search(r"!\$([A-Z]+)\$", formula).group(1) for formula in value_formulas],
+            [getattr(workbook["재고분석"].cell(flow_header_row, column), "column_letter") for column in (purchase_column, sales_column)],
+        )
+        self.assertTrue(output.exists())
+
+    def test_profit_sheet_matches_html_vat_settlement_values_and_statuses(self):
+        output, workbook = self._create_workbook()
+        report_summary = build_report_data(load_sources(EXAMPLE_DIR))["summary"]
+        vat_row = self._labeled_row(workbook, "손익분석", "잠정 부가세 납부 예상액")
+        post_vat_row = self._labeled_row(workbook, "손익분석", "검증 필요")
+
+        self.assertEqual(vat_row[1].value, abs(report_summary["vat_settlement_amount"]))
+        self.assertEqual(vat_row[2].value, report_summary["vat_settlement_status"])
+        self.assertEqual(post_vat_row[1].value, report_summary["post_vat_reference_amount"])
+        self.assertEqual(post_vat_row[2].value, report_summary["post_vat_reference_status"])
+        self.assertEqual(self._labeled_row(workbook, "손익분석", "매출 합계금액")[1].value, report_summary["period_sales_total_amount"])
+        self.assertEqual(self._labeled_row(workbook, "손익분석", "매입 합계금액")[1].value, report_summary["period_purchase_total_amount"])
+        self.assertTrue(output.exists())
 
     def test_missing_optional_metadata_generates_a_warning_without_inventing_records(self):
         with tempfile.TemporaryDirectory() as tmpdir:

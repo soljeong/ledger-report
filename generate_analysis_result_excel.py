@@ -129,7 +129,12 @@ def _column_kind(column: str) -> str:
     normalized = column.lower()
     if "date" in normalized or normalized in {"일자", "주 시작일"}:
         return "date"
-    if any(token in normalized for token in ("rate", "ratio", "margin_rate", "이익률", "비율")):
+    # Report analysis rows publish percentage points (for example 53.7),
+    # whereas summary KPIs use fractional ratios.  The two contracts need
+    # different Excel formats; see _set_labeled_value_format for KPI ratios.
+    if normalized in {"margin_rate", "gross_profit_rate"}:
+        return "percentage_points"
+    if "ratio" in normalized or "비율" in normalized:
         return "ratio"
     if any(token in normalized for token in ("quantity", "stock", "수량", "건수", "row_count", "excel_row")):
         return "quantity"
@@ -142,6 +147,8 @@ def _apply_value_format(cell, column: str) -> None:
     kind = _column_kind(column)
     if kind == "date" and isinstance(cell.value, (date, datetime)):
         cell.number_format = "yyyy-mm-dd"
+    elif kind == "percentage_points" and isinstance(cell.value, (int, float)):
+        cell.number_format = "0.0\\%"
     elif kind == "ratio" and isinstance(cell.value, (int, float)):
         cell.number_format = "0.0%"
     elif kind == "quantity" and isinstance(cell.value, (int, float)):
@@ -223,6 +230,13 @@ def _set_tabular_sheet_options(ws: Worksheet, header_row: int, end_row: int, col
     ws.freeze_panes = f"A{header_row + 1}"
     ws.auto_filter.ref = f"A{header_row}:{get_column_letter(len(columns))}{max(end_row, header_row + 1)}"
     _auto_size(ws)
+
+
+def _set_labeled_value_format(ws: Worksheet, labels: set[str], number_format: str) -> None:
+    """Format only named KPI rows whose values share the adjacent value column."""
+    for row in ws.iter_rows(min_col=1, max_col=2):
+        if row[0].value in labels and isinstance(row[1].value, (int, float)):
+            row[1].number_format = number_format
 
 
 def _new_sheet(workbook: Workbook, title: str) -> Worksheet:
@@ -310,6 +324,7 @@ def _write_summary_sheet(workbook: Workbook, report_data: dict[str, Any], valida
         {"항목": "금액 구성 검증 상태", "값": summary.get("amount_validation_status"), "상태/주의": ""},
     ]
     header_row, end_row, columns = _write_table(ws, rows, ["항목", "값", "상태/주의"], include_empty_columns=True)
+    _set_labeled_value_format(ws, {"매출총이익률"}, "0.0%")
     _set_tabular_sheet_options(ws, header_row, end_row, columns)
     return ws
 
@@ -322,15 +337,26 @@ def _write_metadata_sheet(workbook: Workbook, report_data: dict[str, Any]) -> Wo
 def _write_profit_sheet(workbook: Workbook, report_data: dict[str, Any]) -> tuple[Worksheet, tuple[int, int, list[str]]]:
     ws = _new_sheet(workbook, "손익분석")
     summary = report_data["summary"]
+    vat_settlement = summary.get("vat_settlement_amount")
+    vat_direction = "납부 예상액" if vat_settlement and vat_settlement > 0 else ("환급 예상액" if vat_settlement and vat_settlement < 0 else "정산금")
+    vat_label = f"{'잠정 ' if summary.get('vat_settlement_status') == 'validation_error' else ''}부가세 {vat_direction}"
+    post_vat_status = summary.get("post_vat_reference_status")
+    post_vat_label = "부가세 정산 후 잔여금액" if post_vat_status == "confirmed" else ("검증 필요" if post_vat_status == "error" else "잠정 참고값")
     metric_rows = [
         {"지표": "매출 공급가액", "값": report_data["kpis"]["sales_supply_amount"], "상태": "부가세 제외"},
+        {"지표": "매출 부가세", "값": summary.get("period_sales_vat_amount"), "상태": summary.get("vat_settlement_status")},
+        {"지표": "매출 합계금액", "값": summary.get("period_sales_total_amount"), "상태": "공급가액 + 부가세"},
+        {"지표": "매입 공급가액", "값": summary.get("period_purchase_supply_amount"), "상태": "부가세 제외"},
+        {"지표": "매입 부가세", "값": summary.get("period_purchase_vat_amount"), "상태": summary.get("vat_settlement_status")},
+        {"지표": "매입 합계금액", "값": summary.get("period_purchase_total_amount"), "상태": "공급가액 + 부가세"},
+        {"지표": vat_label, "값": abs(vat_settlement) if isinstance(vat_settlement, (int, float)) else vat_settlement, "상태": summary.get("vat_settlement_status")},
+        {"지표": post_vat_label, "값": summary.get("post_vat_reference_amount"), "상태": post_vat_status},
         {"지표": "FIFO 매출원가", "값": report_data["kpis"]["fifo_sales_cost_amount"], "상태": ""},
         {"지표": "매출총이익", "값": report_data["kpis"]["gross_profit"], "상태": report_data["kpis"]["gross_profit_status"]},
         {"지표": "매출총이익률", "값": report_data["kpis"]["gross_profit_rate"], "상태": "확정 손익일 때만 표시"},
-        {"지표": "매출 부가세", "값": summary.get("period_sales_vat_amount"), "상태": summary.get("vat_settlement_status")},
-        {"지표": "매입 부가세", "값": summary.get("period_purchase_vat_amount"), "상태": summary.get("vat_settlement_status")},
     ]
     _write_table(ws, metric_rows, ["지표", "값", "상태"], title="손익 요약", include_empty_columns=True)
+    _set_labeled_value_format(ws, {"매출총이익률"}, "0.0%")
     weekly = _write_table(
         ws,
         report_data["analysis"]["weekly_margin"],
@@ -481,9 +507,15 @@ def _add_bar_chart(
     chart.x_axis.title = "금액"
     chart.height = 7
     chart.width = 15
-    data = Reference(source_ws, min_col=min(series_cols), max_col=max(series_cols), min_row=header_row, max_row=end_row)
     categories = Reference(source_ws, min_col=category_col, min_row=header_row + 1, max_row=end_row)
-    chart.add_data(data, titles_from_data=True)
+    for series_col in series_cols:
+        # series may be non-contiguous in the source table.  Adding each
+        # requested column separately prevents adjacent measures from silently
+        # becoming chart series.
+        chart.add_data(
+            Reference(source_ws, min_col=series_col, max_col=series_col, min_row=header_row, max_row=end_row),
+            titles_from_data=True,
+        )
     chart.set_categories(categories)
     summary_ws.add_chart(chart, anchor)
 
