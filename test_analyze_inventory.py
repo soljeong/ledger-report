@@ -414,6 +414,121 @@ class InventoryAnalysisTests(unittest.TestCase):
         self.assertEqual((result["summary"]["period_purchase_supply_amount"], result["summary"]["period_purchase_vat_amount"]), (100, 10))
         self.assertEqual(result["rows"][0]["cost_status"], "error")
 
+    def test_unit_price_error_keeps_ledger_quantity_and_validates_fifo_separately(self):
+        broken = purchase("2026-01-10", 5, 100)
+        broken["unit_price"] = None
+        result = analyze([broken], [], [inventory(5)])
+        row = result["rows"][0]
+        state = result["transaction_validations"][0]
+
+        self.assertEqual(
+            (row["period_purchase_quantity"], row["ending_signed_stock_quantity"], row["inventory_book_quantity"]),
+            (5, 5, 5),
+        )
+        self.assertEqual(
+            (row["quantity_reconciliation_status"], row["quantity_reconciliation_validation_status"], row["cost_status"]),
+            ("match", "valid", "error"),
+        )
+        self.assertTrue(state["quantity_eligible"])
+        self.assertFalse(state["fifo_cost_eligible"])
+        self.assertFalse(state["unit_price_valid"])
+
+    def test_post_period_price_error_is_inventory_quantity_only(self):
+        broken = purchase("2026-02-02", 5, 100)
+        broken["unit_price"] = None
+        result = analyze([broken], [], [inventory(5)], end="2026-01-31", stock_date="2026-02-05")
+        row, summary = result["rows"][0], result["summary"]
+        self.assertEqual((row["period_purchase_quantity"], row["inventory_book_quantity"]), (0, 5))
+        self.assertEqual((row["quantity_reconciliation_status"], row["cost_status"]), ("match", "confirmed"))
+        self.assertEqual((summary["period_purchase_cost_amount"], summary["gross_profit_status"]), (0, "confirmed"))
+        self.assertEqual(summary["post_period_unrelated_error_count"], 1)
+
+    def test_invalid_quantity_blocks_match_without_replacing_it_with_zero(self):
+        broken = sale("2026-01-10", 1, amount=100)
+        broken["quantity"] = "not-a-number"
+        result = analyze([purchase("2026-01-01", 1, 100)], [broken], [inventory(1)])
+        row = result["rows"][0]
+        state = [state for state in result["transaction_validations"] if state["source"] == "sales"][0]
+
+        self.assertEqual(row["inventory_quantity_difference"], 0)
+        self.assertEqual(
+            (row["quantity_reconciliation_status"], row["quantity_reconciliation_validation_status"]),
+            ("validation_error", "error"),
+        )
+        self.assertEqual(result["summary"]["quantity_validation_error_count"], 1)
+        self.assertFalse(state["quantity_valid"])
+        self.assertFalse(state["quantity_eligible"])
+
+    def test_opening_fifo_input_errors_propagate_to_current_cost_and_profit(self):
+        missing_price = purchase("2025-12-31", 10, 100)
+        missing_price["unit_price"] = None
+        price_result = analyze(
+            [missing_price], [sale("2026-01-10", 5, amount=500)], [inventory(5)],
+            start="2026-01-01", end="2026-01-31", stock_date="2026-01-31",
+        )
+        self.assertEqual(
+            (price_result["rows"][0]["cost_status"], price_result["summary"]["gross_profit_status"], price_result["summary"]["opening_fifo_error_count"]),
+            ("error", "error", 1),
+        )
+
+        missing_quantity = purchase("2025-12-31", 10, 100)
+        missing_quantity["quantity"] = "not-a-number"
+        quantity_result = analyze(
+            [missing_quantity], [sale("2026-01-10", 5, amount=500)], [inventory(0)],
+            start="2026-01-01", end="2026-01-31", stock_date="2026-01-31",
+        )
+        self.assertEqual((quantity_result["rows"][0]["cost_status"], quantity_result["summary"]["gross_profit_status"]), ("error", "error"))
+
+        global_result = analyze(
+            [purchase("2025-12-31", 10, 100, product_id=None)], [sale("2026-01-10", 5, amount=500)], [inventory(-5)],
+            start="2026-01-01", end="2026-01-31", stock_date="2026-01-31",
+        )
+        self.assertEqual((global_result["summary"]["gross_profit_status"], global_result["summary"]["global_fifo_error_count"]), ("error", 1))
+
+    def test_post_period_unrelated_cancellation_does_not_change_current_cost(self):
+        result = analyze(
+            [purchase("2026-01-01", 1, 100), purchase("2026-02-01", -1, 100, voucher=2, excel_row=2)],
+            [sale("2026-01-02", 1, amount=200)], [inventory(0)],
+            end="2026-01-31", stock_date="2026-01-31",
+        )
+        self.assertEqual((result["rows"][0]["cost_status"], result["summary"]["gross_profit_status"]), ("confirmed", "confirmed"))
+        self.assertEqual(result["summary"]["post_period_unrelated_error_count"], 1)
+        self.assertEqual(result["errors"][0]["fifo_error_scope"], "post_period_unrelated")
+
+    def test_backfill_dependency_and_all_dated_input_metadata(self):
+        bad_backfill = purchase("2026-02-01", 5, 100)
+        bad_backfill["unit_price"] = None
+        backfill_result = analyze(
+            [bad_backfill], [sale("2026-01-10", 5, amount=500)], [inventory(-5)],
+            start="2026-01-01", end="2026-01-31", stock_date="2026-01-31",
+        )
+        self.assertEqual((backfill_result["rows"][0]["cost_status"], backfill_result["summary"]["gross_profit_status"]), ("error", "error"))
+        self.assertEqual(backfill_result["summary"]["backfill_dependency_error_count"], 1)
+        self.assertTrue(backfill_result["errors"][0]["backfill_dependency"])
+
+        invalid_sale = sale("2026-02-01", 1, amount=100)
+        invalid_sale["quantity"] = "not-a-number"
+        invalid_purchase = purchase("2026-03-01", 1, 100, product_id=None)
+        invalid_purchase["unit_price"] = None
+        metadata_result = analyze([invalid_purchase], [invalid_sale], [])
+        self.assertEqual(
+            (
+                metadata_result["metadata"]["input_data_first_transaction_date"],
+                metadata_result["metadata"]["input_data_last_transaction_date"],
+                metadata_result["metadata"]["input_data_last_purchase_date"],
+            ),
+            ("2026-02-01", "2026-03-01", "2026-03-01"),
+        )
+
+    def test_quantity_error_after_inventory_date_does_not_invalidate_current_reconciliation(self):
+        broken = purchase("2026-02-02", 1, 100)
+        broken["quantity"] = "not-a-number"
+        result = analyze([broken], [], [inventory(0)], end="2026-01-31", stock_date="2026-02-01")
+        self.assertEqual(
+            (result["rows"][0]["quantity_reconciliation_status"], result["rows"][0]["quantity_reconciliation_validation_status"]),
+            ("match", "valid"),
+        )
+
     def test_invalid_supply_is_excluded_without_total_amount_substitution(self):
         broken = sale("2026-01-02", 1, amount=110)
         broken.update(supply_amount="bad", vat=10, total_amount=110)

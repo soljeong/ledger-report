@@ -91,6 +91,7 @@ def render_markdown(analysis: dict[str, Any]) -> str:
         f"- 후속 매입 소급배정: {summary['backfilled_quantity']:,} / {money(summary['backfilled_amount'])}원",
         f"- 미확정 출고: {summary['unconfirmed_quantity']:,}",
         f"- 재고수량 대사 불일치: {summary['quantity_reconciliation_mismatch_count']:,}개",
+        f"- 수량 계산 검증 오류: {summary.get('quantity_validation_error_count', 0):,}건",
         f"- 오류: {summary['error_count']:,}건",
         "",
         "## 계산 오류와 경고",

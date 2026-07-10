@@ -34,6 +34,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
             "FIFO 재고금액",
             "매출총이익",
             "FIFO 원가 상태",
+            "수량 계산 검증 상태",
             "confirmed",
             "backfilled",
             "unconfirmed",
