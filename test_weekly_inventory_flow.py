@@ -69,9 +69,10 @@ class WeeklyInventoryFlowTests(unittest.TestCase):
         self.assertEqual(figure.data[3].yaxis, "y2")
         self.assertEqual(figure.layout.yaxis2.overlaying, "y")
 
-    def test_report_embeds_chart_and_weekly_table_in_amount_section(self) -> None:
+    def test_report_renders_inventory_as_dedicated_a4_page(self) -> None:
         html = render_report_html(load_sources(EXAMPLE_DIR), load_report_spec(BASE_DIR / "report_spec.yaml"))
 
+        self.assertIn('class="report-page report-page--analysis"', html)
         self.assertIn("주간 재고금액 흐름: 매입은 위, 출고는 아래", html)
         self.assertIn("주간 출고 감소·주간 매출금액", html)
         self.assertIn("주말 추정 재고금액", html)

@@ -55,6 +55,11 @@ def weekly_purchase_sales_figure(df: pd.DataFrame, spec: dict[str, Any]) -> go.F
         barmode="overlay",
         template="plotly_white",
         height=spec.get("height", 380),
+        font={
+            "family": "Pretendard, Noto Sans KR, Apple SD Gothic Neo, Segoe UI, sans-serif",
+            "size": 15,
+            "color": "#1f2933",
+        },
         margin={"l": 60, "r": 20, "t": 24, "b": 90},
         showlegend=False,
     )
@@ -152,6 +157,11 @@ def weekly_inventory_flow_figure(df: pd.DataFrame, spec: dict[str, Any]) -> go.F
         bargap=0.34,
         template="plotly_white",
         height=spec.get("height", 440),
+        font={
+            "family": "Pretendard, Noto Sans KR, Apple SD Gothic Neo, Segoe UI, sans-serif",
+            "size": 15,
+            "color": "#1f2933",
+        },
         margin={"l": 70, "r": 80, "t": 24, "b": 70},
         showlegend=False,
         hovermode="x unified",
@@ -199,6 +209,11 @@ def principal_margin_figure(df: pd.DataFrame, spec: dict[str, Any]) -> go.Figure
         barmode="overlay",
         template="plotly_white",
         height=spec.get("height", 420),
+        font={
+            "family": "Pretendard, Noto Sans KR, Apple SD Gothic Neo, Segoe UI, sans-serif",
+            "size": 15,
+            "color": "#1f2933",
+        },
         margin={"l": 150, "r": 130, "t": 24, "b": 45},
         showlegend=False,
     )

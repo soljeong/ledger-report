@@ -37,6 +37,7 @@ class PublicLayoutTest(unittest.TestCase):
 
         self.assertIn("<title>매입/매출 재고 분석 보고서</title>", html)
         self.assertIn("<h1>매입/매출 재고 분석 보고서</h1>", html)
+        self.assertEqual(html.count('class="report-page'), 4)
         self.assertIn("Sample Robotics", html)
         self.assertNotIn("페" + "트라", html)
 

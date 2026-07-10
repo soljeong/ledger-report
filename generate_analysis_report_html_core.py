@@ -304,14 +304,14 @@ def render_amount_balance_chart(
           </div>
         """
 
-    chart_width = 960
-    chart_height = 520
-    plot_top = 118
-    plot_height = 286
+    chart_width = 900
+    chart_height = 470
+    plot_top = 104
+    plot_height = 254
     baseline_y = plot_top + plot_height
-    left_x = 188
-    right_x = 602
-    block_width = 170
+    left_x = 170
+    right_x = 570
+    block_width = 160
 
     def height(value: int | float) -> float:
         return (value / total_amount) * plot_height
@@ -351,11 +351,11 @@ def render_amount_balance_chart(
             </pattern>
           </defs>
 
-          <text class="balance-equation" x="480" y="36" text-anchor="middle">{escape(equation)}</text>
-          <text class="balance-note" x="480" y="64" text-anchor="middle">기초재고 0 가정 · 이익 = 매출 + 현재재고금액 - 매입</text>
+          <text class="balance-equation" x="450" y="34" text-anchor="middle">{escape(equation)}</text>
+          <text class="balance-note" x="450" y="60" text-anchor="middle">기초재고 0 가정 · 이익 = 매출 + 현재재고금액 - 매입</text>
 
           <line class="balance-equality-line" x1="{left_x}" y1="{plot_top}" x2="{right_x + block_width}" y2="{plot_top}"></line>
-          <text class="balance-total-label" x="480" y="{plot_top - 14}" text-anchor="middle">양쪽 합계 {money(total_amount)}원</text>
+          <text class="balance-total-label" x="450" y="{plot_top - 14}" text-anchor="middle">양쪽 합계 {money(total_amount)}원</text>
 
           <rect class="balance-block balance-inventory" x="{left_x}" y="{inventory_y:.1f}" width="{block_width}" height="{inventory_height:.1f}" rx="3"></rect>
           <rect class="balance-block balance-sales" x="{left_x}" y="{sales_y:.1f}" width="{block_width}" height="{sales_height:.1f}" rx="3"></rect>
@@ -369,10 +369,10 @@ def render_amount_balance_chart(
 
           <line class="balance-baseline" x1="{left_x - 28}" y1="{baseline_y}" x2="{left_x + block_width + 28}" y2="{baseline_y}"></line>
           <line class="balance-baseline" x1="{right_x - 28}" y1="{baseline_y}" x2="{right_x + block_width + 28}" y2="{baseline_y}"></line>
-          <text class="balance-side-title" x="{left_x + block_width / 2}" y="452" text-anchor="middle">매출 + 재고</text>
-          <text class="balance-side-note" x="{left_x + block_width / 2}" y="478" text-anchor="middle">회수액과 남아 있는 자산</text>
-          <text class="balance-side-title" x="{right_x + block_width / 2}" y="452" text-anchor="middle">이익 + 매입</text>
-          <text class="balance-side-note" x="{right_x + block_width / 2}" y="478" text-anchor="middle">남는 금액과 투입액</text>
+          <text class="balance-side-title" x="{left_x + block_width / 2}" y="408" text-anchor="middle">매출 + 재고</text>
+          <text class="balance-side-note" x="{left_x + block_width / 2}" y="432" text-anchor="middle">회수액과 남아 있는 자산</text>
+          <text class="balance-side-title" x="{right_x + block_width / 2}" y="408" text-anchor="middle">이익 + 매입</text>
+          <text class="balance-side-note" x="{right_x + block_width / 2}" y="432" text-anchor="middle">남는 금액과 투입액</text>
         </svg>
       </div>
     """
@@ -714,14 +714,6 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         for label, description, amount in amount_rows
     )
 
-    source_rows = "\n".join(
-        f"<li>{escape(meta['source_file'])}: {escape(meta['transaction_type'])}</li>"
-        for meta in [purchase_meta, sales_meta, inventory_meta]
-    )
-    if sources.get("sales_voucher_metadata"):
-        metadata_meta = sources["sales_voucher_metadata"]["metadata"]
-        source_rows += f"<li>{escape(metadata_meta['source_file'])}: sales voucher metadata</li>"
-
     return f"""<!doctype html>
 <html lang="ko">
 <head>
@@ -731,89 +723,133 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
   <style>
     :root {{
       color-scheme: light;
-      --bg: #f6f7f9;
+      --bg: #eef2f6;
       --panel: #ffffff;
       --text: #1f2933;
       --muted: #667085;
-      --line: #d8dee8;
+      --line: #d5dde7;
       --accent: #2f6f7e;
       --accent-soft: #e3f1f3;
       --warn-soft: #fff4df;
+      --page-width: 794px;
+      --page-height: 1123px;
+      --page-padding: 40px;
     }}
     * {{ box-sizing: border-box; }}
+    html {{
+      background: var(--bg);
+    }}
     body {{
       margin: 0;
       background: var(--bg);
       color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.5;
+      font-family: "Pretendard", "Noto Sans KR", "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+      line-height: 1.55;
+      overflow-x: auto;
     }}
     main {{
-      width: min(1120px, calc(100% - 40px));
-      margin: 40px auto;
+      width: var(--page-width);
+      margin: 28px auto 36px;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }}
+    .report-page {{
+      width: var(--page-width);
+      min-height: var(--page-height);
+      padding: var(--page-padding);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      page-break-after: always;
+      break-after: page;
+    }}
+    .report-page:last-child {{
+      page-break-after: auto;
+      break-after: auto;
+    }}
+    .cover-header {{
+      padding-bottom: 18px;
+      border-bottom: 2px solid var(--accent-soft);
     }}
     header {{
-      margin-bottom: 24px;
+      margin-bottom: 0;
     }}
     h1 {{
-      margin: 0 0 8px;
-      font-size: 30px;
+      margin: 0 0 10px;
+      font-size: 38px;
+      line-height: 1.18;
       letter-spacing: 0;
     }}
     .meta {{
       color: var(--muted);
       margin: 0;
-      font-size: 14px;
+      font-size: 15px;
     }}
     section {{
-      background: var(--panel);
+      background: #fbfcfd;
       border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 22px;
-      margin-bottom: 18px;
+      border-radius: 14px;
+      padding: 24px 26px;
+      margin-bottom: 0;
     }}
     h2 {{
-      margin: 0 0 16px;
-      font-size: 20px;
+      margin: 0 0 18px;
+      font-size: 26px;
+      line-height: 1.24;
       letter-spacing: 0;
+    }}
+    .page-panel {{
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }}
+    .report-page--analysis .page-panel {{
+      flex: 1;
     }}
     .cards {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
+      gap: 14px;
     }}
     .card {{
       border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 14px;
-      background: #fbfcfd;
-      min-height: 124px;
+      border-radius: 12px;
+      padding: 18px;
+      background: #ffffff;
+      min-height: 132px;
     }}
     .card span {{
       display: block;
       color: var(--muted);
-      font-size: 13px;
-      margin-bottom: 8px;
+      font-size: 14px;
+      margin-bottom: 10px;
     }}
     .card strong {{
       display: block;
-      font-size: 22px;
+      font-size: 26px;
       line-height: 1.25;
       letter-spacing: 0;
     }}
     .card p {{
-      margin: 8px 0 0;
+      margin: 10px 0 0;
       color: var(--muted);
-      font-size: 13px;
+      font-size: 14px;
     }}
     table {{
       width: 100%;
       border-collapse: collapse;
-      font-size: 14px;
+      font-size: 15px;
+      background: #ffffff;
     }}
     th, td {{
       border-bottom: 1px solid var(--line);
-      padding: 12px 10px;
+      padding: 11px 10px;
       text-align: left;
       vertical-align: top;
     }}
@@ -821,6 +857,10 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
       color: var(--muted);
       font-weight: 700;
       background: var(--accent-soft);
+    }}
+    tbody tr:last-child th,
+    tbody tr:last-child td {{
+      border-bottom: none;
     }}
     .amount-table tbody th {{
       width: 140px;
@@ -839,27 +879,28 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
       white-space: nowrap;
     }}
     .formula {{
-      margin: 14px 0 0;
-      padding: 12px 14px;
+      margin: 2px 0 0;
+      padding: 14px 16px;
       border-radius: 8px;
       background: var(--warn-soft);
       color: #5f4717;
-      font-size: 14px;
+      font-size: 15px;
     }}
     .section-note {{
-      margin: -6px 0 14px;
+      margin: -4px 0 0;
       color: var(--muted);
-      font-size: 14px;
+      font-size: 15px;
     }}
     .table-scroll {{
-      overflow-x: auto;
+      overflow: visible;
     }}
     .legend {{
       display: flex;
+      flex-wrap: wrap;
       gap: 14px;
-      margin: 0 0 12px;
+      margin: 2px 0 2px;
       color: var(--muted);
-      font-size: 14px;
+      font-size: 15px;
     }}
     .legend span {{
       display: inline-flex;
@@ -878,21 +919,25 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     .inventory-chip {{ background: #344054; }}
     .chart-wrap {{
       width: 100%;
-      overflow-x: auto;
       border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 8px;
-      background: #fbfcfd;
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: #ffffff;
     }}
     .balance-chart-wrap {{
-      margin: 0 0 18px;
-      padding: 10px 12px 2px;
+      margin: 0;
+      padding: 10px 12px 4px;
     }}
     .balance-chart-wrap svg {{
       display: block;
       width: 100%;
-      min-width: 700px;
       height: auto;
+    }}
+    .js-plotly-plot,
+    .plot-container,
+    .plotly,
+    .plotly-graph-div {{
+      width: 100% !important;
     }}
     .balance-block {{
       stroke: #344054;
@@ -961,116 +1006,128 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
       color: var(--accent);
       font-weight: 700;
     }}
-    @media (max-width: 860px) {{
-      main {{ width: min(100% - 24px, 1120px); margin: 24px auto; }}
-      .cards {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+    @page {{
+      size: A4 portrait;
+      margin: 0;
     }}
-    @media (max-width: 560px) {{
-      .cards {{ grid-template-columns: 1fr; }}
-      section {{ padding: 16px; }}
-      h1 {{ font-size: 24px; }}
-      .card strong {{ font-size: 19px; }}
+    @media print {{
+      html, body {{
+        background: #ffffff;
+      }}
+      main {{
+        margin: 0;
+        padding: 0;
+        gap: 0;
+      }}
+      .report-page {{
+        margin: 0;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+      }}
     }}
   </style>
 </head>
 <body>
   <main>
-    <header>
-      <h1>{escape(report_title)}</h1>
-      <p class="meta">생성일 {escape(generated)} · 범위: {escape(report_scope)}</p>
-    </header>
+    <article class="report-page report-page--cover">
+      <header class="cover-header">
+        <h1>{escape(report_title)}</h1>
+        <p class="meta">생성일 {escape(generated)} · 범위: {escape(report_scope)}</p>
+      </header>
 
-    <section aria-labelledby="summary-title">
-      <h2 id="summary-title">요약</h2>
-      <div class="cards">
-        {summary_cards}
-      </div>
-      <details>
-        <summary>사용한 원본 파일</summary>
-        <ul>
-          {source_rows}
-        </ul>
-      </details>
-    </section>
+      <section class="page-panel" aria-labelledby="summary-title">
+        <h2 id="summary-title">요약</h2>
+        <div class="cards">
+          {summary_cards}
+        </div>
+      </section>
 
-    <section aria-labelledby="amount-title">
-      <h2 id="amount-title">금액 대사</h2>
-      {amount_balance_chart}
-      <table class="amount-table">
-        <thead>
-          <tr>
-            <th>항목</th>
-            <th>계산 기준</th>
-            <th class="money">금액</th>
-          </tr>
-        </thead>
-        <tbody>
-          {amount_table}
-        </tbody>
-      </table>
-      <p class="formula">이익 = 매출금액 + 재고금액 - 매입금액. 재고금액은 평균원가 기준이다.</p>
-    </section>
-
-    <section aria-labelledby="weekly-title">
-      <h2 id="weekly-title">{escape(weekly_chart_spec['title'])}</h2>
-      <p class="section-note">월요일 시작 주 단위로 매출금액과 현재 평균원가 기준 매출원가를 합산했다.</p>
-      <p class="section-note">축: {escape(weekly_chart_spec.get('x_axis_title', '주 시작일'))} / {escape(weekly_chart_spec.get('y_axis_title', '금액'))}</p>
-      <p class="section-note">표시 단위: {escape(weekly_chart_spec.get('unit_label', '원'))}</p>
-      <div class="legend">
-        <span><i class="revenue-chip"></i>{escape(weekly_chart_spec['series']['sales_amount']['label'])}</span>
-        <span><i class="outbound-chip"></i>{escape(weekly_chart_spec['series']['cost_amount']['label'])}</span>
-      </div>
-      {weekly_chart}
-      <div class="table-scroll">
-        <table>
+      <section class="page-panel" aria-labelledby="amount-title">
+        <h2 id="amount-title">금액 대사</h2>
+        {amount_balance_chart}
+        <table class="amount-table">
           <thead>
             <tr>
-              <th>주 시작일</th>
-              <th class="money">건수</th>
-              <th class="money">수량</th>
-              <th class="money">매출금액</th>
-              <th class="money">매출원가</th>
-              <th class="money">마진금액</th>
-              <th class="money">마진율</th>
+              <th>항목</th>
+              <th>계산 기준</th>
+              <th class="money">금액</th>
             </tr>
           </thead>
           <tbody>
-            {weekly_table_rows}
+            {amount_table}
           </tbody>
         </table>
-      </div>
-    </section>
+        <p class="formula">이익 = 매출금액 + 재고금액 - 매입금액. 재고금액은 평균원가 기준이다.</p>
+      </section>
+    </article>
 
-    <section aria-labelledby="principal-title">
-      <h2 id="principal-title">{escape(principal_chart_spec['title'])}</h2>
-      <p class="section-note">매출 전표의 원청 메타데이터를 기준으로 묶었다. 매출원가는 기간 내 매입을 제품별 단가 기준으로 환산한 추정값이다.</p>
-      <p class="section-note">축: {escape(principal_chart_spec.get('y_axis_title', '원청'))} / {escape(principal_chart_spec.get('x_axis_title', '금액'))}</p>
-      <p class="section-note">표시 단위: {escape(principal_chart_spec.get('unit_label', '원'))}</p>
-      <div class="legend">
-        <span><i class="revenue-chip"></i>매출금액</span>
-        <span><i class="outbound-chip"></i>매출원가</span>
-      </div>
-      {principal_chart}
-      <div class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th class="rank">순위</th>
-              <th>원청</th>
-              <th class="money">건수</th>
-              <th class="money">수량</th>
-              <th class="money">매출금액</th>
-              <th class="money">매출원가</th>
-              <th class="money">마진금액</th>
-              <th class="money">마진율</th>
-            </tr>
-          </thead>
-          <tbody>
-            {principal_table_rows}
-          </tbody>
-        </table>
-      </div>
-    </section>
+    <!-- REPORT_EXTRA_PAGES -->
+
+    <article class="report-page report-page--analysis">
+      <section class="page-panel" aria-labelledby="weekly-title">
+        <h2 id="weekly-title">{escape(weekly_chart_spec['title'])}</h2>
+        <p class="section-note">월요일 시작 주 단위로 매출금액과 현재 평균원가 기준 매출원가를 합산했다.</p>
+        <p class="section-note">축: {escape(weekly_chart_spec.get('x_axis_title', '주 시작일'))} / {escape(weekly_chart_spec.get('y_axis_title', '금액'))}</p>
+        <p class="section-note">표시 단위: {escape(weekly_chart_spec.get('unit_label', '원'))}</p>
+        <div class="legend">
+          <span><i class="revenue-chip"></i>{escape(weekly_chart_spec['series']['sales_amount']['label'])}</span>
+          <span><i class="outbound-chip"></i>{escape(weekly_chart_spec['series']['cost_amount']['label'])}</span>
+        </div>
+        {weekly_chart}
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>주 시작일</th>
+                <th class="money">건수</th>
+                <th class="money">수량</th>
+                <th class="money">매출금액</th>
+                <th class="money">매출원가</th>
+                <th class="money">마진금액</th>
+                <th class="money">마진율</th>
+              </tr>
+            </thead>
+            <tbody>
+              {weekly_table_rows}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </article>
+
+    <article class="report-page report-page--analysis">
+      <section class="page-panel" aria-labelledby="principal-title">
+        <h2 id="principal-title">{escape(principal_chart_spec['title'])}</h2>
+        <p class="section-note">매출 전표의 원청 메타데이터를 기준으로 묶었다. 매출원가는 기간 내 매입을 제품별 단가 기준으로 환산한 추정값이다.</p>
+        <p class="section-note">축: {escape(principal_chart_spec.get('y_axis_title', '원청'))} / {escape(principal_chart_spec.get('x_axis_title', '금액'))}</p>
+        <p class="section-note">표시 단위: {escape(principal_chart_spec.get('unit_label', '원'))}</p>
+        <div class="legend">
+          <span><i class="revenue-chip"></i>매출금액</span>
+          <span><i class="outbound-chip"></i>매출원가</span>
+        </div>
+        {principal_chart}
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th class="rank">순위</th>
+                <th>원청</th>
+                <th class="money">건수</th>
+                <th class="money">수량</th>
+                <th class="money">매출금액</th>
+                <th class="money">매출원가</th>
+                <th class="money">마진금액</th>
+                <th class="money">마진율</th>
+              </tr>
+            </thead>
+            <tbody>
+              {principal_table_rows}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </article>
   </main>
 </body>
 </html>

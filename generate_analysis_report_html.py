@@ -141,39 +141,40 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         include_plotlyjs=include_plotlyjs,
     )
     inserted = f"""
-      <h3 id="inventory-flow-title" style="margin:28px 0 10px;font-size:17px;">{escape(chart_spec['title'])}</h3>
-      <p class="section-note">매입은 공급금액으로 증가, 출고는 매출수량 × 현재 평균원가로 감소시켰다. 현재재고에서 기간 순증감을 역산해 기초재고를 추정한다.</p>
-      <p class="section-note">주 시작일 기준으로 묶었고, 막대는 주간 매입 증가·주간 출고 감소·주간 매출금액, 선은 주말 추정 재고금액이다.</p>
-      <p class="section-note">표시 단위: {escape(chart_spec.get('unit_label', '백만원'))}</p>
-      <div class="legend">
-        <span><i class="purchase-chip"></i>{escape(chart_spec["series"]["purchase_increase"]["label"])}</span>
-        <span><i class="outbound-chip"></i>{escape(chart_spec["series"]["outbound_cost_estimate"]["label"])}</span>
-        <span><i class="revenue-chip"></i>{escape(chart_spec["series"]["sales_amount"]["label"])}</span>
-        <span><i class="inventory-chip"></i>{escape(chart_spec["series"]["estimated_inventory_amount"]["label"])}</span>
-      </div>
-      {chart}
-      <div class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>주 시작일</th>
-              <th class="money">매입 증가</th>
-              <th class="money">출고 감소(추정원가)</th>
-              <th class="money">순증감</th>
-              <th class="money">추정 재고금액</th>
-            </tr>
-          </thead>
-          <tbody>{render_weekly_inventory_flow_table_rows(rows)}</tbody>
-        </table>
-      </div>
+    <article class="report-page report-page--analysis">
+      <section class="page-panel" aria-labelledby="inventory-flow-title">
+        <h2 id="inventory-flow-title">{escape(chart_spec['title'])}</h2>
+        <p class="section-note">매입은 공급금액으로 증가, 출고는 매출수량 × 현재 평균원가로 감소시켰다. 현재재고에서 기간 순증감을 역산해 기초재고를 추정한다.</p>
+        <p class="section-note">주 시작일 기준으로 묶었고, 막대는 주간 매입 증가·주간 출고 감소·주간 매출금액, 선은 주말 추정 재고금액이다.</p>
+        <p class="section-note">표시 단위: {escape(chart_spec.get('unit_label', '백만원'))}</p>
+        <div class="legend">
+          <span><i class="purchase-chip"></i>{escape(chart_spec["series"]["purchase_increase"]["label"])}</span>
+          <span><i class="outbound-chip"></i>{escape(chart_spec["series"]["outbound_cost_estimate"]["label"])}</span>
+          <span><i class="revenue-chip"></i>{escape(chart_spec["series"]["sales_amount"]["label"])}</span>
+          <span><i class="inventory-chip"></i>{escape(chart_spec["series"]["estimated_inventory_amount"]["label"])}</span>
+        </div>
+        {chart}
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>주 시작일</th>
+                <th class="money">매입 증가</th>
+                <th class="money">출고 감소(추정원가)</th>
+                <th class="money">순증감</th>
+                <th class="money">추정 재고금액</th>
+              </tr>
+            </thead>
+            <tbody>{render_weekly_inventory_flow_table_rows(rows)}</tbody>
+          </table>
+        </div>
+      </section>
+    </article>
     """
-    marker = (
-        '      <p class="formula">이익 = 매출금액 + 재고금액 - 매입금액. '
-        '재고금액은 평균원가 기준이다.</p>\n    </section>'
-    )
+    marker = "    <!-- REPORT_EXTRA_PAGES -->"
     if marker not in html:
-        raise RuntimeError("amount reconciliation section marker not found")
-    return html.replace(marker, marker.removesuffix("\n    </section>") + inserted + "\n    </section>", 1)
+        raise RuntimeError("inventory page insertion marker not found")
+    return html.replace(marker, inserted, 1)
 
 
 def generate_report(input_dir: Path, output_path: Path, spec_path: Path = _base.DEFAULT_SPEC) -> None:
