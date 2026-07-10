@@ -53,6 +53,113 @@ def weekly_purchase_sales_figure(df: pd.DataFrame, spec: dict[str, Any]) -> go.F
     return figure
 
 
+def weekly_inventory_flow_figure(df: pd.DataFrame, spec: dict[str, Any]) -> go.Figure:
+    divisor = float(spec.get("value_divisor", 1_000_000)) or 1.0
+    unit_label = spec.get("unit_label", "백만원")
+    empty_numeric = pd.Series(0.0, index=df.index, dtype="float64")
+    labels = df["label"] if "label" in df else pd.Series(dtype="object")
+    purchase_values = pd.to_numeric(
+        df["purchase_increase"] if "purchase_increase" in df else empty_numeric,
+        errors="coerce",
+    ).fillna(0) / divisor
+    outbound_values = pd.to_numeric(
+        df["outbound_cost_estimate"] if "outbound_cost_estimate" in df else empty_numeric,
+        errors="coerce",
+    ).fillna(0) / divisor
+    inventory_values = pd.to_numeric(
+        df["estimated_inventory_amount"] if "estimated_inventory_amount" in df else empty_numeric,
+        errors="coerce",
+    ).fillna(0) / divisor
+    net_values = pd.to_numeric(
+        df["net_change"] if "net_change" in df else empty_numeric,
+        errors="coerce",
+    ).fillna(0) / divisor
+
+    purchase_label = _series_label(spec, "purchase_increase", "주간 매입 증가")
+    outbound_label = _series_label(spec, "outbound_cost_estimate", "주간 출고 감소(추정원가)")
+    inventory_label = _series_label(spec, "estimated_inventory_amount", "주말 추정 재고금액")
+
+    figure = go.Figure()
+    figure.add_trace(
+        go.Bar(
+            x=labels,
+            y=purchase_values,
+            name=purchase_label,
+            marker_color=_series_color(spec, "purchase_increase", "#2f6f7e"),
+            hovertemplate=f"%{{x}}<br>{purchase_label}: %{{y:,.2f}} {unit_label}<extra></extra>",
+        )
+    )
+    figure.add_trace(
+        go.Bar(
+            x=labels,
+            y=-outbound_values,
+            customdata=outbound_values,
+            name=outbound_label,
+            marker_color=_series_color(spec, "outbound_cost_estimate", "#c47a23"),
+            hovertemplate=f"%{{x}}<br>{outbound_label}: %{{customdata:,.2f}} {unit_label}<extra></extra>",
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=labels,
+            y=inventory_values,
+            yaxis="y2",
+            mode="lines+markers",
+            name=inventory_label,
+            line={"color": _series_color(spec, "estimated_inventory_amount", "#344054"), "width": 3},
+            marker={"size": 8},
+            hovertemplate=f"%{{x}}<br>{inventory_label}: %{{y:,.2f}} {unit_label}<extra></extra>",
+        )
+    )
+
+    if len(df):
+        net_list = list(net_values)
+        purchase_list = list(purchase_values)
+        outbound_list = list(outbound_values)
+        figure.add_trace(
+            go.Scatter(
+                x=labels,
+                y=[
+                    purchase if net >= 0 else -outbound
+                    for net, purchase, outbound in zip(net_list, purchase_list, outbound_list)
+                ],
+                mode="text",
+                text=[f"순증감 {net:+,.2f} {unit_label}" for net in net_list],
+                textposition=["top center" if net >= 0 else "bottom center" for net in net_list],
+                textfont={"size": 11, "color": "#475467"},
+                showlegend=False,
+                hoverinfo="skip",
+                cliponaxis=False,
+            )
+        )
+
+    figure.update_layout(
+        title=spec.get("title", "주간 재고금액 흐름: 매입은 위, 출고는 아래"),
+        xaxis_title=spec.get("x_axis_title", "주 종료일"),
+        yaxis={
+            "title": spec.get("y_axis_title", f"주간 증감 금액 ({unit_label})"),
+            "zeroline": True,
+            "zerolinewidth": 1,
+            "zerolinecolor": "#667085",
+            "gridcolor": "#e4e7ec",
+        },
+        yaxis2={
+            "title": spec.get("secondary_y_axis_title", f"주말 추정 재고금액 ({unit_label})"),
+            "overlaying": "y",
+            "side": "right",
+            "showgrid": False,
+        },
+        barmode="relative",
+        bargap=0.34,
+        template="plotly_white",
+        height=spec.get("height", 440),
+        margin={"l": 70, "r": 80, "t": 68, "b": 70},
+        legend={"orientation": "h", "y": 1.14, "x": 0},
+        hovermode="x unified",
+    )
+    return figure
+
+
 def principal_margin_figure(df: pd.DataFrame, spec: dict[str, Any]) -> go.Figure:
     unit_label = spec.get("unit_label", "원")
     principals = df["principal"] if "principal" in df else []
