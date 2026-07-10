@@ -7,11 +7,11 @@
     "unique_product_ids": 6,
     "date_min": "2026-05-01",
     "date_max": "2026-05-23",
-    "detail_totals": {"quantity": 67, "supply_amount": 8390, "vat": 0, "total_amount": 8390}
+    "detail_totals": {"quantity": 67, "supply_amount": 8390, "vat": 54, "total_amount": 8444}
   },
   "records": [
     {"excel_row": 2, "transaction_type": "purchase", "company": "Demo Supply", "date": "2026-05-01", "voucher": 1, "item_name": "FIFO Widget", "specification": "A", "product_id": 1001, "quantity": 10, "unit_price": 100, "supply_amount": 1000, "vat": 0, "total_amount": 1000},
-    {"excel_row": 3, "transaction_type": "purchase", "company": "Demo Supply", "date": "2026-05-10", "voucher": 2, "item_name": "FIFO Widget", "specification": "A", "product_id": 1001, "quantity": 6, "unit_price": 120, "supply_amount": 720, "vat": 0, "total_amount": 720},
+    {"excel_row": 3, "transaction_type": "purchase", "company": "Demo Supply", "date": "2026-05-10", "voucher": 2, "item_name": "FIFO Widget", "specification": "A", "product_id": 1001, "quantity": 6, "unit_price": 120, "supply_amount": 720, "vat": 72, "total_amount": 792},
     {"excel_row": 4, "transaction_type": "purchase", "company": "Demo Supply", "date": "2026-05-15", "voucher": 3, "item_name": "FIFO Widget", "specification": "A", "product_id": 1001, "quantity": 5, "unit_price": 150, "supply_amount": 750, "vat": 0, "total_amount": 750},
     {"excel_row": 5, "transaction_type": "purchase", "company": "Demo Supply", "date": "2026-05-21", "voucher": 4, "item_name": "Backfill Part", "specification": "B", "product_id": 1002, "quantity": 6, "unit_price": 200, "supply_amount": 1200, "vat": 0, "total_amount": 1200},
     {"excel_row": 6, "transaction_type": "purchase", "company": "Demo Supply", "date": "2026-05-22", "voucher": 5, "item_name": "Backfill Part", "specification": "B", "product_id": 1002, "quantity": 10, "unit_price": 220, "supply_amount": 2200, "vat": 0, "total_amount": 2200},
@@ -19,7 +19,7 @@
     {"excel_row": 8, "transaction_type": "purchase", "company": "Demo Supply", "date": "2026-05-10", "voucher": 7, "item_name": "Cancel Part", "specification": "D", "product_id": 1005, "quantity": 10, "unit_price": 50, "supply_amount": 500, "vat": 0, "total_amount": 500},
     {"excel_row": 9, "transaction_type": "purchase", "company": "Demo Supply", "date": "2026-05-11", "voucher": 8, "item_name": "Cancel Part", "specification": "D", "product_id": 1005, "quantity": 5, "unit_price": 60, "supply_amount": 300, "vat": 0, "total_amount": 300},
     {"excel_row": 10, "transaction_type": "purchase", "company": "Demo Supply", "date": "2026-05-10", "voucher": 9, "item_name": "Return Part", "specification": "E", "product_id": 1006, "quantity": 10, "unit_price": 80, "supply_amount": 800, "vat": 0, "total_amount": 800},
-    {"excel_row": 11, "transaction_type": "purchase", "company": "Demo Supply", "date": "2026-05-12", "voucher": 10, "item_name": "Cancel Part", "specification": "D", "product_id": 1005, "quantity": -3, "unit_price": 60, "supply_amount": -180, "vat": 0, "total_amount": -180},
+    {"excel_row": 11, "transaction_type": "purchase", "company": "Demo Supply", "date": "2026-05-12", "voucher": 10, "item_name": "Cancel Part", "specification": "D", "product_id": 1005, "quantity": -3, "unit_price": 60, "supply_amount": -180, "vat": -18, "total_amount": -198},
     {"excel_row": 12, "transaction_type": "purchase", "company": "Demo Supply", "date": "2026-05-22", "voucher": 11, "item_name": "After End Part", "specification": "F", "product_id": 1004, "quantity": 5, "unit_price": 40, "supply_amount": 200, "vat": 0, "total_amount": 200}
   ]
 }
