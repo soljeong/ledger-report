@@ -27,15 +27,16 @@ class WeeklyInventoryFlowTests(unittest.TestCase):
             sources["purchase"]["records"],
             sources["sales"]["records"],
             sources["inventory"]["records"],
+            sources["reconciliation"],
         )
 
-        self.assertEqual(rows[0]["week_start"], "2026-04-27")
-        self.assertEqual(rows[0]["purchase_increase"], 740_000)
-        self.assertEqual(rows[0]["sales_amount"], 0)
-        self.assertEqual(rows[1]["sales_amount"], 462_000)
-        self.assertEqual(rows[0]["estimated_inventory_amount"], 835_000)
-        self.assertEqual(rows[-1]["week_start"], "2026-06-15")
-        self.assertEqual(rows[-1]["estimated_inventory_amount"], 676_500)
+        self.assertEqual(rows[0]["week_start"], "2026-05-04")
+        self.assertEqual(rows[0]["purchase_increase"], 2920)
+        self.assertEqual(rows[0]["sales_amount"], 3500)
+        self.assertEqual(rows[0]["outbound_cost_estimate"], 1740)
+        self.assertEqual(rows[0]["estimated_inventory_amount"], 1780)
+        self.assertEqual(rows[-1]["week_start"], "2026-05-18")
+        self.assertEqual(rows[-1]["estimated_inventory_amount"], -570)
 
     def test_chart_uses_signed_bars_and_secondary_axis(self) -> None:
         spec = load_report_spec(BASE_DIR / "report_spec.yaml")["charts"]["weekly_inventory_flow"]
@@ -76,10 +77,10 @@ class WeeklyInventoryFlowTests(unittest.TestCase):
         self.assertIn("주간 재고금액 흐름: 매입은 위, 출고는 아래", html)
         self.assertIn("주간 출고 감소·주간 매출금액", html)
         self.assertIn("주말 추정 재고금액", html)
-        self.assertIn("4/27", html)
-        self.assertIn("676,500", html)
+        self.assertIn("5/4", html)
+        self.assertIn("1,510", html)
         self.assertIn("<th class=\"money\">매입 증가</th>", html)
-        self.assertIn("<th class=\"money\">출고 감소(추정원가)</th>", html)
+        self.assertIn("<th class=\"money\">출고 감소(FIFO 원가)</th>", html)
 
 
 if __name__ == "__main__":

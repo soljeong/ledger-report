@@ -1,86 +1,1011 @@
 {
-  "summary": {
-    "purchase_records": 4,
-    "sales_records": 4,
-    "inventory_records": 4,
-    "purchase_product_ids": 4,
-    "sales_product_ids": 4,
-    "inventory_product_ids": 4,
-    "sales_without_purchase_product_id_count": 0,
-    "sales_without_purchase_product_ids": [],
-    "purchase_without_inventory_product_id_count": 0,
-    "purchase_without_inventory_product_ids": [],
-    "sales_without_inventory_product_id_count": 0,
-    "sales_without_inventory_product_ids": [],
-    "calculated_negative_stock_count": 0,
-    "inventory_negative_stock_count": 0,
-    "quantity_mismatch_count": 0,
-    "purchase_amount": 1045000,
-    "sales_amount": 627000,
-    "inventory_amount_at_average_cost": 676500,
-    "inventory_amount_at_latest_purchase_price": 676500,
-    "remainder_at_average_cost": 258500,
-    "remainder_at_latest_purchase_price": 258500
+  "metadata": {
+    "period_start": "2026-05-10",
+    "period_end": "2026-05-20",
+    "inventory_date": "2026-05-25",
+    "analysis_start_date": "2026-05-10",
+    "analysis_end_date": "2026-05-20",
+    "inventory_reference_date": "2026-05-25",
+    "input_data_first_transaction_date": "2026-05-01",
+    "input_data_last_transaction_date": "2026-05-24",
+    "input_data_last_purchase_date": "2026-05-22",
+    "input_first_transaction_date": "2026-05-01",
+    "input_last_transaction_date": "2026-05-24",
+    "input_last_purchase_date": "2026-05-22",
+    "backfill_last_purchase_date": "2026-05-22",
+    "costing_method": "FIFO",
+    "inventory_unit_costs_used": false,
+    "inventory_price_fields_ignored": [
+      "average_cost",
+      "latest_purchase_price",
+      "sales_price"
+    ]
   },
-  "calculated_negative_stock": [],
-  "inventory_negative_stock": [],
-  "quantity_mismatches": [],
+  "summary": {
+    "opening_stock_quantity": 6,
+    "opening_stock_amount": 600,
+    "period_purchase_quantity": 36,
+    "period_purchase_cost_amount": 3790,
+    "period_sales_quantity": 38,
+    "period_sales_amount": 9460,
+    "fifo_sales_cost_amount": 4960,
+    "gross_profit": 4500,
+    "ending_signed_stock_quantity": 4,
+    "ending_normal_stock_quantity": 19,
+    "ending_fifo_inventory_amount": 1510,
+    "ending_negative_stock_quantity": 15,
+    "backfilled_quantity": 10,
+    "backfilled_amount": 2080,
+    "unconfirmed_quantity": 5,
+    "cost_status_counts": {
+      "confirmed": 5,
+      "backfilled": 1,
+      "unconfirmed": 1,
+      "error": 0
+    },
+    "status_counts": {
+      "confirmed": 5,
+      "backfilled": 1,
+      "unconfirmed": 1,
+      "error": 0
+    },
+    "quantity_reconciliation_mismatch_count": 2,
+    "inventory_reconciliation_mismatch_count": 2,
+    "error_count": 1,
+    "reconciliation_status_counts": {
+      "match": 5,
+      "inventory_more": 1,
+      "ledger_more": 0,
+      "ledger_only": 0,
+      "inventory_only": 0,
+      "inventory_negative_stock": 1
+    },
+    "purchase_amount": 3790,
+    "sales_amount": 9460,
+    "inventory_amount_at_fifo": 1510,
+    "remainder_at_fifo": 4500,
+    "inventory_amount_at_average_cost": null,
+    "inventory_amount_at_latest_purchase_price": null,
+    "remainder_at_average_cost": null,
+    "remainder_at_latest_purchase_price": null
+  },
   "rows": [
     {
       "product_id": 1001,
-      "item_name": "Motor Driver IC",
-      "item_names": ["Motor Driver IC"],
-      "purchase_quantity": 100,
-      "sales_quantity": 40,
-      "calculated_stock_quantity": 60,
-      "inventory_quantity": 60,
+      "item_name": "FIFO Widget",
+      "item_names": [
+        "FIFO Widget"
+      ],
+      "specification": "A",
+      "specifications": [
+        "A"
+      ],
+      "opening_stock_quantity": 6,
+      "opening_stock_amount": 600,
+      "period_purchase_quantity": 11,
+      "period_purchase_cost_amount": 1470,
+      "period_sales_quantity": 14,
+      "period_sales_amount": 3500,
+      "fifo_sales_cost_amount": 1620,
+      "gross_profit": 1880,
+      "ending_signed_stock_quantity": 3,
+      "ending_normal_stock_quantity": 3,
+      "ending_fifo_inventory_amount": 450,
+      "ending_negative_stock_quantity": 0,
+      "backfilled_quantity": 0,
+      "backfilled_amount": 0,
+      "unconfirmed_quantity": 0,
+      "cost_status": "confirmed",
+      "inventory_book_quantity": 3,
+      "inventory_sheet_quantity": 3,
+      "inventory_quantity_difference": 0,
+      "quantity_reconciliation_status": "match",
+      "remaining_cost_layers": [
+        {
+          "product_id": 1001,
+          "purchase_date": "2026-05-15",
+          "voucher": 3,
+          "excel_row": 4,
+          "original_quantity": 5,
+          "remaining_quantity": 3,
+          "unit_cost": 150,
+          "post_period_end": false,
+          "remaining_amount": 450
+        }
+      ],
+      "purchase_quantity": 11,
+      "sales_quantity": 14,
+      "calculated_stock_quantity": 3,
+      "inventory_quantity": 3,
       "quantity_difference": 0,
-      "purchase_amount": 550000,
-      "sales_amount": 352000,
-      "inventory_amount_at_average_cost": 330000,
-      "inventory_amount_at_latest_purchase_price": 330000
+      "purchase_amount": 1470,
+      "sales_amount": 3500
     },
     {
       "product_id": 1002,
-      "item_name": "Sensor Board",
-      "item_names": ["Sensor Board"],
-      "purchase_quantity": 80,
-      "sales_quantity": 20,
-      "calculated_stock_quantity": 60,
-      "inventory_quantity": 60,
+      "item_name": "Backfill Part",
+      "item_names": [
+        "Backfill Part"
+      ],
+      "specification": "B",
+      "specifications": [
+        "B"
+      ],
+      "opening_stock_quantity": 0,
+      "opening_stock_amount": 0,
+      "period_purchase_quantity": 0,
+      "period_purchase_cost_amount": 0,
+      "period_sales_quantity": 10,
+      "period_sales_amount": 3000,
+      "fifo_sales_cost_amount": 2080,
+      "gross_profit": 920,
+      "ending_signed_stock_quantity": -10,
+      "ending_normal_stock_quantity": 0,
+      "ending_fifo_inventory_amount": 0,
+      "ending_negative_stock_quantity": 10,
+      "backfilled_quantity": 10,
+      "backfilled_amount": 2080,
+      "unconfirmed_quantity": 0,
+      "cost_status": "backfilled",
+      "inventory_book_quantity": 4,
+      "inventory_sheet_quantity": 4,
+      "inventory_quantity_difference": 0,
+      "quantity_reconciliation_status": "match",
+      "remaining_cost_layers": [],
+      "purchase_quantity": 0,
+      "sales_quantity": 10,
+      "calculated_stock_quantity": 4,
+      "inventory_quantity": 4,
       "quantity_difference": 0,
-      "purchase_amount": 264000,
-      "sales_amount": 110000,
-      "inventory_amount_at_average_cost": 198000,
-      "inventory_amount_at_latest_purchase_price": 198000
+      "purchase_amount": 0,
+      "sales_amount": 3000
     },
     {
       "product_id": 1003,
-      "item_name": "Power Module",
-      "item_names": ["Power Module"],
-      "purchase_quantity": 50,
-      "sales_quantity": 15,
-      "calculated_stock_quantity": 35,
-      "inventory_quantity": 35,
+      "item_name": "Same Day Part",
+      "item_names": [
+        "Same Day Part",
+        "Same Day Part renamed"
+      ],
+      "specification": "C",
+      "specifications": [
+        "C",
+        "C2"
+      ],
+      "opening_stock_quantity": 0,
+      "opening_stock_amount": 0,
+      "period_purchase_quantity": 3,
+      "period_purchase_cost_amount": 900,
+      "period_sales_quantity": 3,
+      "period_sales_amount": 1500,
+      "fifo_sales_cost_amount": 900,
+      "gross_profit": 600,
+      "ending_signed_stock_quantity": 0,
+      "ending_normal_stock_quantity": 0,
+      "ending_fifo_inventory_amount": 0,
+      "ending_negative_stock_quantity": 0,
+      "backfilled_quantity": 0,
+      "backfilled_amount": 0,
+      "unconfirmed_quantity": 0,
+      "cost_status": "confirmed",
+      "inventory_book_quantity": 0,
+      "inventory_sheet_quantity": 0,
+      "inventory_quantity_difference": 0,
+      "quantity_reconciliation_status": "match",
+      "remaining_cost_layers": [],
+      "purchase_quantity": 3,
+      "sales_quantity": 3,
+      "calculated_stock_quantity": 0,
+      "inventory_quantity": 0,
       "quantity_difference": 0,
-      "purchase_amount": 165000,
-      "sales_amount": 99000,
-      "inventory_amount_at_average_cost": 115500,
-      "inventory_amount_at_latest_purchase_price": 115500
+      "purchase_amount": 900,
+      "sales_amount": 1500
     },
     {
       "product_id": 1004,
-      "item_name": "Cable Set",
-      "item_names": ["Cable Set"],
-      "purchase_quantity": 60,
-      "sales_quantity": 30,
-      "calculated_stock_quantity": 30,
-      "inventory_quantity": 30,
+      "item_name": "After End Part",
+      "item_names": [
+        "After End Part"
+      ],
+      "specification": "F",
+      "specifications": [
+        "F"
+      ],
+      "opening_stock_quantity": 0,
+      "opening_stock_amount": 0,
+      "period_purchase_quantity": 0,
+      "period_purchase_cost_amount": 0,
+      "period_sales_quantity": 0,
+      "period_sales_amount": 0,
+      "fifo_sales_cost_amount": 0,
+      "gross_profit": 0,
+      "ending_signed_stock_quantity": 0,
+      "ending_normal_stock_quantity": 0,
+      "ending_fifo_inventory_amount": 0,
+      "ending_negative_stock_quantity": 0,
+      "backfilled_quantity": 0,
+      "backfilled_amount": 0,
+      "unconfirmed_quantity": 0,
+      "cost_status": "confirmed",
+      "inventory_book_quantity": 3,
+      "inventory_sheet_quantity": 4,
+      "inventory_quantity_difference": 1,
+      "quantity_reconciliation_status": "inventory_more",
+      "remaining_cost_layers": [],
+      "purchase_quantity": 0,
+      "sales_quantity": 0,
+      "calculated_stock_quantity": 3,
+      "inventory_quantity": 4,
+      "quantity_difference": 1,
+      "purchase_amount": 0,
+      "sales_amount": 0
+    },
+    {
+      "product_id": 1005,
+      "item_name": "Cancel Part",
+      "item_names": [
+        "Cancel Part"
+      ],
+      "specification": "D",
+      "specifications": [
+        "D"
+      ],
+      "opening_stock_quantity": 0,
+      "opening_stock_amount": 0,
+      "period_purchase_quantity": 12,
+      "period_purchase_cost_amount": 620,
+      "period_sales_quantity": 4,
+      "period_sales_amount": 600,
+      "fifo_sales_cost_amount": 200,
+      "gross_profit": 400,
+      "ending_signed_stock_quantity": 8,
+      "ending_normal_stock_quantity": 8,
+      "ending_fifo_inventory_amount": 420,
+      "ending_negative_stock_quantity": 0,
+      "backfilled_quantity": 0,
+      "backfilled_amount": 0,
+      "unconfirmed_quantity": 0,
+      "cost_status": "confirmed",
+      "inventory_book_quantity": 8,
+      "inventory_sheet_quantity": 8,
+      "inventory_quantity_difference": 0,
+      "quantity_reconciliation_status": "match",
+      "remaining_cost_layers": [
+        {
+          "product_id": 1005,
+          "purchase_date": "2026-05-10",
+          "voucher": 7,
+          "excel_row": 8,
+          "original_quantity": 10,
+          "remaining_quantity": 6,
+          "unit_cost": 50,
+          "post_period_end": false,
+          "remaining_amount": 300
+        },
+        {
+          "product_id": 1005,
+          "purchase_date": "2026-05-11",
+          "voucher": 8,
+          "excel_row": 9,
+          "original_quantity": 5,
+          "remaining_quantity": 2,
+          "unit_cost": 60,
+          "post_period_end": false,
+          "remaining_amount": 120
+        }
+      ],
+      "purchase_quantity": 12,
+      "sales_quantity": 4,
+      "calculated_stock_quantity": 8,
+      "inventory_quantity": 8,
       "quantity_difference": 0,
-      "purchase_amount": 66000,
-      "sales_amount": 66000,
-      "inventory_amount_at_average_cost": 33000,
-      "inventory_amount_at_latest_purchase_price": 33000
+      "purchase_amount": 620,
+      "sales_amount": 600
+    },
+    {
+      "product_id": 1006,
+      "item_name": "Return Part",
+      "item_names": [
+        "Return Part"
+      ],
+      "specification": "E",
+      "specifications": [
+        "E"
+      ],
+      "opening_stock_quantity": 0,
+      "opening_stock_amount": 0,
+      "period_purchase_quantity": 10,
+      "period_purchase_cost_amount": 800,
+      "period_sales_quantity": 2,
+      "period_sales_amount": 360,
+      "fifo_sales_cost_amount": 160,
+      "gross_profit": 200,
+      "ending_signed_stock_quantity": 8,
+      "ending_normal_stock_quantity": 8,
+      "ending_fifo_inventory_amount": 640,
+      "ending_negative_stock_quantity": 0,
+      "backfilled_quantity": 0,
+      "backfilled_amount": 0,
+      "unconfirmed_quantity": 0,
+      "cost_status": "confirmed",
+      "inventory_book_quantity": 8,
+      "inventory_sheet_quantity": 8,
+      "inventory_quantity_difference": 0,
+      "quantity_reconciliation_status": "match",
+      "remaining_cost_layers": [
+        {
+          "product_id": 1006,
+          "purchase_date": "2026-05-10",
+          "voucher": 9,
+          "excel_row": 10,
+          "original_quantity": 10,
+          "remaining_quantity": 8,
+          "unit_cost": 80,
+          "post_period_end": false,
+          "remaining_amount": 640
+        }
+      ],
+      "purchase_quantity": 10,
+      "sales_quantity": 2,
+      "calculated_stock_quantity": 8,
+      "inventory_quantity": 8,
+      "quantity_difference": 0,
+      "purchase_amount": 800,
+      "sales_amount": 360
+    },
+    {
+      "product_id": 1007,
+      "item_name": "Unconfirmed Part",
+      "item_names": [
+        "Unconfirmed Part"
+      ],
+      "specification": "G",
+      "specifications": [
+        "G"
+      ],
+      "opening_stock_quantity": 0,
+      "opening_stock_amount": 0,
+      "period_purchase_quantity": 0,
+      "period_purchase_cost_amount": 0,
+      "period_sales_quantity": 5,
+      "period_sales_amount": 500,
+      "fifo_sales_cost_amount": 0,
+      "gross_profit": 500,
+      "ending_signed_stock_quantity": -5,
+      "ending_normal_stock_quantity": 0,
+      "ending_fifo_inventory_amount": 0,
+      "ending_negative_stock_quantity": 5,
+      "backfilled_quantity": 0,
+      "backfilled_amount": 0,
+      "unconfirmed_quantity": 5,
+      "cost_status": "unconfirmed",
+      "inventory_book_quantity": -5,
+      "inventory_sheet_quantity": -5,
+      "inventory_quantity_difference": 0,
+      "quantity_reconciliation_status": "inventory_negative_stock",
+      "remaining_cost_layers": [],
+      "purchase_quantity": 0,
+      "sales_quantity": 5,
+      "calculated_stock_quantity": -5,
+      "inventory_quantity": -5,
+      "quantity_difference": 0,
+      "purchase_amount": 0,
+      "sales_amount": 500
+    }
+  ],
+  "sales_allocations": [
+    {
+      "sale_id": "2026-05-05|1|2",
+      "product_id": 1001,
+      "date": "2026-05-05",
+      "voucher": 1,
+      "excel_row": 2,
+      "company": "Demo Buyer A",
+      "item_name": "FIFO Widget",
+      "specification": "A",
+      "sale_quantity": 4,
+      "effective_quantity": 4,
+      "canceled_quantity": 0,
+      "allocations": [
+        {
+          "purchase_date": "2026-05-01",
+          "purchase_voucher": 1,
+          "purchase_excel_row": 2,
+          "purchase_quantity": 4,
+          "unit_cost": 100,
+          "cost_amount": 400,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        }
+      ],
+      "fifo_cost_amount": 400,
+      "unconfirmed_quantity": 0,
+      "backfilled_quantity": 0,
+      "cost_status": "confirmed",
+      "in_analysis_period": false
+    },
+    {
+      "sale_id": "2026-05-10|2|3",
+      "product_id": 1001,
+      "date": "2026-05-10",
+      "voucher": 2,
+      "excel_row": 3,
+      "company": "Demo Buyer A",
+      "item_name": "FIFO Widget",
+      "specification": "A",
+      "sale_quantity": 8,
+      "effective_quantity": 8,
+      "canceled_quantity": 0,
+      "allocations": [
+        {
+          "purchase_date": "2026-05-01",
+          "purchase_voucher": 1,
+          "purchase_excel_row": 2,
+          "purchase_quantity": 6,
+          "unit_cost": 100,
+          "cost_amount": 600,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        },
+        {
+          "purchase_date": "2026-05-10",
+          "purchase_voucher": 2,
+          "purchase_excel_row": 3,
+          "purchase_quantity": 2,
+          "unit_cost": 120,
+          "cost_amount": 240,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        }
+      ],
+      "fifo_cost_amount": 840,
+      "unconfirmed_quantity": 0,
+      "backfilled_quantity": 0,
+      "cost_status": "confirmed",
+      "in_analysis_period": true
+    },
+    {
+      "sale_id": "2026-05-10|5|6",
+      "product_id": 1003,
+      "date": "2026-05-10",
+      "voucher": 5,
+      "excel_row": 6,
+      "company": "Demo Buyer C",
+      "item_name": "Same Day Part renamed",
+      "specification": "C2",
+      "sale_quantity": 3,
+      "effective_quantity": 3,
+      "canceled_quantity": 0,
+      "allocations": [
+        {
+          "purchase_date": "2026-05-10",
+          "purchase_voucher": 6,
+          "purchase_excel_row": 7,
+          "purchase_quantity": 3,
+          "unit_cost": 300,
+          "cost_amount": 900,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        }
+      ],
+      "fifo_cost_amount": 900,
+      "unconfirmed_quantity": 0,
+      "backfilled_quantity": 0,
+      "cost_status": "confirmed",
+      "in_analysis_period": true
+    },
+    {
+      "sale_id": "2026-05-11|7|8",
+      "product_id": 1006,
+      "date": "2026-05-11",
+      "voucher": 7,
+      "excel_row": 8,
+      "company": "Demo Buyer E",
+      "item_name": "Return Part",
+      "specification": "E",
+      "sale_quantity": 4,
+      "effective_quantity": 2,
+      "canceled_quantity": 2,
+      "allocations": [
+        {
+          "purchase_date": "2026-05-10",
+          "purchase_voucher": 9,
+          "purchase_excel_row": 10,
+          "purchase_quantity": 2,
+          "unit_cost": 80,
+          "cost_amount": 160,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        }
+      ],
+      "fifo_cost_amount": 160,
+      "unconfirmed_quantity": 0,
+      "backfilled_quantity": 0,
+      "cost_status": "confirmed",
+      "in_analysis_period": true
+    },
+    {
+      "sale_id": "2026-05-12|4|5",
+      "product_id": 1002,
+      "date": "2026-05-12",
+      "voucher": 4,
+      "excel_row": 5,
+      "company": "Demo Buyer C",
+      "item_name": "Backfill Part",
+      "specification": "B",
+      "sale_quantity": 10,
+      "effective_quantity": 10,
+      "canceled_quantity": 0,
+      "allocations": [
+        {
+          "purchase_date": "2026-05-21",
+          "purchase_voucher": 4,
+          "purchase_excel_row": 5,
+          "purchase_quantity": 6,
+          "unit_cost": 200,
+          "cost_amount": 1200,
+          "backfilled": true,
+          "allocation_source": "backfill"
+        },
+        {
+          "purchase_date": "2026-05-22",
+          "purchase_voucher": 5,
+          "purchase_excel_row": 6,
+          "purchase_quantity": 4,
+          "unit_cost": 220,
+          "cost_amount": 880,
+          "backfilled": true,
+          "allocation_source": "backfill"
+        }
+      ],
+      "fifo_cost_amount": 2080,
+      "unconfirmed_quantity": 0,
+      "backfilled_quantity": 10,
+      "cost_status": "backfilled",
+      "in_analysis_period": true
+    },
+    {
+      "sale_id": "2026-05-12|8|9",
+      "product_id": 1006,
+      "date": "2026-05-12",
+      "voucher": 8,
+      "excel_row": 9,
+      "company": "Demo Buyer E",
+      "item_name": "Return Part",
+      "specification": "E",
+      "sale_quantity": 3,
+      "effective_quantity": 0,
+      "canceled_quantity": 3,
+      "allocations": [],
+      "fifo_cost_amount": 0,
+      "unconfirmed_quantity": 0,
+      "backfilled_quantity": 0,
+      "cost_status": "confirmed",
+      "in_analysis_period": true
+    },
+    {
+      "sale_id": "2026-05-13|6|7",
+      "product_id": 1005,
+      "date": "2026-05-13",
+      "voucher": 6,
+      "excel_row": 7,
+      "company": "Demo Buyer D",
+      "item_name": "Cancel Part",
+      "specification": "D",
+      "sale_quantity": 4,
+      "effective_quantity": 4,
+      "canceled_quantity": 0,
+      "allocations": [
+        {
+          "purchase_date": "2026-05-10",
+          "purchase_voucher": 7,
+          "purchase_excel_row": 8,
+          "purchase_quantity": 4,
+          "unit_cost": 50,
+          "cost_amount": 200,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        }
+      ],
+      "fifo_cost_amount": 200,
+      "unconfirmed_quantity": 0,
+      "backfilled_quantity": 0,
+      "cost_status": "confirmed",
+      "in_analysis_period": true
+    },
+    {
+      "sale_id": "2026-05-14|10|11",
+      "product_id": 1007,
+      "date": "2026-05-14",
+      "voucher": 10,
+      "excel_row": 11,
+      "company": "Demo Buyer F",
+      "item_name": "Unconfirmed Part",
+      "specification": "G",
+      "sale_quantity": 5,
+      "effective_quantity": 5,
+      "canceled_quantity": 0,
+      "allocations": [],
+      "fifo_cost_amount": 0,
+      "unconfirmed_quantity": 5,
+      "backfilled_quantity": 0,
+      "cost_status": "unconfirmed",
+      "in_analysis_period": true
+    },
+    {
+      "sale_id": "2026-05-20|3|4",
+      "product_id": 1001,
+      "date": "2026-05-20",
+      "voucher": 3,
+      "excel_row": 4,
+      "company": "Demo Buyer B",
+      "item_name": "FIFO Widget",
+      "specification": "A",
+      "sale_quantity": 6,
+      "effective_quantity": 6,
+      "canceled_quantity": 0,
+      "allocations": [
+        {
+          "purchase_date": "2026-05-10",
+          "purchase_voucher": 2,
+          "purchase_excel_row": 3,
+          "purchase_quantity": 4,
+          "unit_cost": 120,
+          "cost_amount": 480,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        },
+        {
+          "purchase_date": "2026-05-15",
+          "purchase_voucher": 3,
+          "purchase_excel_row": 4,
+          "purchase_quantity": 2,
+          "unit_cost": 150,
+          "cost_amount": 300,
+          "backfilled": false,
+          "allocation_source": "period_fifo"
+        }
+      ],
+      "fifo_cost_amount": 780,
+      "unconfirmed_quantity": 0,
+      "backfilled_quantity": 0,
+      "cost_status": "confirmed",
+      "in_analysis_period": true
+    }
+  ],
+  "unconfirmed_shipments": [
+    {
+      "sale_id": "2026-05-14|10|11",
+      "product_id": 1007,
+      "date": "2026-05-14",
+      "voucher": 10,
+      "excel_row": 11,
+      "company": "Demo Buyer F",
+      "item_name": "Unconfirmed Part",
+      "specification": "G",
+      "sale_quantity": 5,
+      "effective_quantity": 5,
+      "canceled_quantity": 0,
+      "allocations": [],
+      "fifo_cost_amount": 0,
+      "unconfirmed_quantity": 5,
+      "backfilled_quantity": 0,
+      "cost_status": "unconfirmed",
+      "in_analysis_period": true
+    }
+  ],
+  "backfill_allocations": [
+    {
+      "sale_id": "2026-05-12|4|5",
+      "product_id": 1002,
+      "purchase_date": "2026-05-21",
+      "purchase_voucher": 4,
+      "purchase_excel_row": 5,
+      "purchase_quantity": 6,
+      "unit_cost": 200,
+      "cost_amount": 1200,
+      "backfilled": true,
+      "allocation_source": "backfill"
+    },
+    {
+      "sale_id": "2026-05-12|4|5",
+      "product_id": 1002,
+      "purchase_date": "2026-05-22",
+      "purchase_voucher": 5,
+      "purchase_excel_row": 6,
+      "purchase_quantity": 4,
+      "unit_cost": 220,
+      "cost_amount": 880,
+      "backfilled": true,
+      "allocation_source": "backfill"
+    }
+  ],
+  "cancellation_events": [
+    {
+      "type": "purchase_cancellation",
+      "product_id": 1005,
+      "date": "2026-05-12",
+      "voucher": 10,
+      "excel_row": 11,
+      "requested_quantity": 3,
+      "allocations": [
+        {
+          "purchase_date": "2026-05-11",
+          "purchase_voucher": 8,
+          "purchase_excel_row": 9,
+          "quantity": 3,
+          "unit_cost": 60,
+          "amount": 180
+        }
+      ]
+    },
+    {
+      "type": "sales_cancellation",
+      "product_id": 1006,
+      "date": "2026-05-15",
+      "voucher": 9,
+      "excel_row": 10,
+      "requested_quantity": 5,
+      "sales": [
+        {
+          "sale_id": "2026-05-12|8|9",
+          "quantity": 3,
+          "unconfirmed_quantity": 0,
+          "restored_allocations": [
+            {
+              "purchase_date": "2026-05-10",
+              "purchase_voucher": 9,
+              "purchase_excel_row": 10,
+              "quantity": 3,
+              "unit_cost": 80
+            }
+          ]
+        },
+        {
+          "sale_id": "2026-05-11|7|8",
+          "quantity": 2,
+          "unconfirmed_quantity": 0,
+          "restored_allocations": [
+            {
+              "purchase_date": "2026-05-10",
+              "purchase_voucher": 9,
+              "purchase_excel_row": 10,
+              "quantity": 2,
+              "unit_cost": 80
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": "missing_product_id",
+      "source": "sales",
+      "product_id": null,
+      "date": "2026-05-18",
+      "voucher": 13,
+      "excel_row": 14,
+      "reason": "record excluded from FIFO and quantity calculations"
+    }
+  ],
+  "warnings": [
+    {
+      "code": "item_name_mismatch",
+      "product_id": 1003,
+      "values": [
+        "Same Day Part",
+        "Same Day Part renamed"
+      ]
+    },
+    {
+      "code": "specification_mismatch",
+      "product_id": 1003,
+      "values": [
+        "C",
+        "C2"
+      ]
+    }
+  ],
+  "calculated_negative_stock": [
+    {
+      "product_id": 1002,
+      "item_name": "Backfill Part",
+      "item_names": [
+        "Backfill Part"
+      ],
+      "specification": "B",
+      "specifications": [
+        "B"
+      ],
+      "opening_stock_quantity": 0,
+      "opening_stock_amount": 0,
+      "period_purchase_quantity": 0,
+      "period_purchase_cost_amount": 0,
+      "period_sales_quantity": 10,
+      "period_sales_amount": 3000,
+      "fifo_sales_cost_amount": 2080,
+      "gross_profit": 920,
+      "ending_signed_stock_quantity": -10,
+      "ending_normal_stock_quantity": 0,
+      "ending_fifo_inventory_amount": 0,
+      "ending_negative_stock_quantity": 10,
+      "backfilled_quantity": 10,
+      "backfilled_amount": 2080,
+      "unconfirmed_quantity": 0,
+      "cost_status": "backfilled",
+      "inventory_book_quantity": 4,
+      "inventory_sheet_quantity": 4,
+      "inventory_quantity_difference": 0,
+      "quantity_reconciliation_status": "match",
+      "remaining_cost_layers": [],
+      "purchase_quantity": 0,
+      "sales_quantity": 10,
+      "calculated_stock_quantity": 4,
+      "inventory_quantity": 4,
+      "quantity_difference": 0,
+      "purchase_amount": 0,
+      "sales_amount": 3000
+    },
+    {
+      "product_id": 1007,
+      "item_name": "Unconfirmed Part",
+      "item_names": [
+        "Unconfirmed Part"
+      ],
+      "specification": "G",
+      "specifications": [
+        "G"
+      ],
+      "opening_stock_quantity": 0,
+      "opening_stock_amount": 0,
+      "period_purchase_quantity": 0,
+      "period_purchase_cost_amount": 0,
+      "period_sales_quantity": 5,
+      "period_sales_amount": 500,
+      "fifo_sales_cost_amount": 0,
+      "gross_profit": 500,
+      "ending_signed_stock_quantity": -5,
+      "ending_normal_stock_quantity": 0,
+      "ending_fifo_inventory_amount": 0,
+      "ending_negative_stock_quantity": 5,
+      "backfilled_quantity": 0,
+      "backfilled_amount": 0,
+      "unconfirmed_quantity": 5,
+      "cost_status": "unconfirmed",
+      "inventory_book_quantity": -5,
+      "inventory_sheet_quantity": -5,
+      "inventory_quantity_difference": 0,
+      "quantity_reconciliation_status": "inventory_negative_stock",
+      "remaining_cost_layers": [],
+      "purchase_quantity": 0,
+      "sales_quantity": 5,
+      "calculated_stock_quantity": -5,
+      "inventory_quantity": -5,
+      "quantity_difference": 0,
+      "purchase_amount": 0,
+      "sales_amount": 500
+    }
+  ],
+  "inventory_negative_stock": [
+    {
+      "product_id": 1007,
+      "item_name": "Unconfirmed Part",
+      "item_names": [
+        "Unconfirmed Part"
+      ],
+      "specification": "G",
+      "specifications": [
+        "G"
+      ],
+      "opening_stock_quantity": 0,
+      "opening_stock_amount": 0,
+      "period_purchase_quantity": 0,
+      "period_purchase_cost_amount": 0,
+      "period_sales_quantity": 5,
+      "period_sales_amount": 500,
+      "fifo_sales_cost_amount": 0,
+      "gross_profit": 500,
+      "ending_signed_stock_quantity": -5,
+      "ending_normal_stock_quantity": 0,
+      "ending_fifo_inventory_amount": 0,
+      "ending_negative_stock_quantity": 5,
+      "backfilled_quantity": 0,
+      "backfilled_amount": 0,
+      "unconfirmed_quantity": 5,
+      "cost_status": "unconfirmed",
+      "inventory_book_quantity": -5,
+      "inventory_sheet_quantity": -5,
+      "inventory_quantity_difference": 0,
+      "quantity_reconciliation_status": "inventory_negative_stock",
+      "remaining_cost_layers": [],
+      "purchase_quantity": 0,
+      "sales_quantity": 5,
+      "calculated_stock_quantity": -5,
+      "inventory_quantity": -5,
+      "quantity_difference": 0,
+      "purchase_amount": 0,
+      "sales_amount": 500
+    }
+  ],
+  "quantity_mismatches": [
+    {
+      "product_id": 1004,
+      "item_name": "After End Part",
+      "item_names": [
+        "After End Part"
+      ],
+      "specification": "F",
+      "specifications": [
+        "F"
+      ],
+      "opening_stock_quantity": 0,
+      "opening_stock_amount": 0,
+      "period_purchase_quantity": 0,
+      "period_purchase_cost_amount": 0,
+      "period_sales_quantity": 0,
+      "period_sales_amount": 0,
+      "fifo_sales_cost_amount": 0,
+      "gross_profit": 0,
+      "ending_signed_stock_quantity": 0,
+      "ending_normal_stock_quantity": 0,
+      "ending_fifo_inventory_amount": 0,
+      "ending_negative_stock_quantity": 0,
+      "backfilled_quantity": 0,
+      "backfilled_amount": 0,
+      "unconfirmed_quantity": 0,
+      "cost_status": "confirmed",
+      "inventory_book_quantity": 3,
+      "inventory_sheet_quantity": 4,
+      "inventory_quantity_difference": 1,
+      "quantity_reconciliation_status": "inventory_more",
+      "remaining_cost_layers": [],
+      "purchase_quantity": 0,
+      "sales_quantity": 0,
+      "calculated_stock_quantity": 3,
+      "inventory_quantity": 4,
+      "quantity_difference": 1,
+      "purchase_amount": 0,
+      "sales_amount": 0
+    },
+    {
+      "product_id": 1007,
+      "item_name": "Unconfirmed Part",
+      "item_names": [
+        "Unconfirmed Part"
+      ],
+      "specification": "G",
+      "specifications": [
+        "G"
+      ],
+      "opening_stock_quantity": 0,
+      "opening_stock_amount": 0,
+      "period_purchase_quantity": 0,
+      "period_purchase_cost_amount": 0,
+      "period_sales_quantity": 5,
+      "period_sales_amount": 500,
+      "fifo_sales_cost_amount": 0,
+      "gross_profit": 500,
+      "ending_signed_stock_quantity": -5,
+      "ending_normal_stock_quantity": 0,
+      "ending_fifo_inventory_amount": 0,
+      "ending_negative_stock_quantity": 5,
+      "backfilled_quantity": 0,
+      "backfilled_amount": 0,
+      "unconfirmed_quantity": 5,
+      "cost_status": "unconfirmed",
+      "inventory_book_quantity": -5,
+      "inventory_sheet_quantity": -5,
+      "inventory_quantity_difference": 0,
+      "quantity_reconciliation_status": "inventory_negative_stock",
+      "remaining_cost_layers": [],
+      "purchase_quantity": 0,
+      "sales_quantity": 5,
+      "calculated_stock_quantity": -5,
+      "inventory_quantity": -5,
+      "quantity_difference": 0,
+      "purchase_amount": 0,
+      "sales_amount": 500
     }
   ]
 }

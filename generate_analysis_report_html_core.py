@@ -147,26 +147,28 @@ def weekly_purchase_sales_amounts(
     purchase_records: list[dict[str, Any]],
     sales_records: list[dict[str, Any]],
     inventory_records: list[dict[str, Any]],
+    reconciliation: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     sales_by_day: dict[date, int | float] = defaultdict(int)
     cost_by_day: dict[date, int | float] = defaultdict(int)
     quantity_by_day: dict[date, int | float] = defaultdict(int)
     row_count_by_day: dict[date, int] = defaultdict(int)
     date_values: list[date] = []
-    inventory_cost_by_product: dict[Any, float] = {}
-
-    for row in inventory_records:
-        product_id = row.get("product_id")
-        if product_id is None:
-            continue
-        inventory_cost_by_product[product_id] = float(row.get("average_cost") or 0)
+    fifo_cost_by_sale: dict[str, float] = {}
+    if reconciliation:
+        fifo_cost_by_sale = {
+            row["sale_id"]: float(row.get("fifo_cost_amount") or 0)
+            for row in reconciliation.get("sales_allocations", [])
+            if row.get("in_analysis_period")
+        }
 
     for row in purchase_records:
         date_values.append(date.fromisoformat(row["date"]))
     for row in sales_records:
         row_date = date.fromisoformat(row["date"])
         sales_by_day[row_date] += row.get("total_amount") or 0
-        cost_by_day[row_date] += (row.get("quantity") or 0) * inventory_cost_by_product.get(row.get("product_id"), 0)
+        sale_id = f"{row.get('date')}|{row.get('voucher')}|{row.get('excel_row')}"
+        cost_by_day[row_date] += fifo_cost_by_sale.get(sale_id, 0)
         quantity_by_day[row_date] += row.get("quantity") or 0
         row_count_by_day[row_date] += 1
         date_values.append(row_date)
@@ -407,24 +409,6 @@ def figure_html(figure: Any, *, include_plotlyjs: bool | str) -> str:
     )
 
 
-def purchase_unit_costs(records: list[dict[str, Any]]) -> dict[Any, float]:
-    grouped: dict[Any, dict[str, float]] = defaultdict(lambda: {"quantity": 0, "amount": 0})
-    for row in records:
-        product_id = row.get("product_id")
-        if product_id is None:
-            continue
-        quantity = row.get("quantity") or 0
-        if quantity == 0:
-            continue
-        grouped[product_id]["quantity"] += quantity
-        grouped[product_id]["amount"] += row.get("total_amount") or 0
-    return {
-        product_id: values["amount"] / values["quantity"]
-        for product_id, values in grouped.items()
-        if values["quantity"]
-    }
-
-
 def voucher_principal_map(metadata: dict[str, Any] | None) -> dict[str, str]:
     if not metadata:
         return {}
@@ -438,9 +422,14 @@ def principal_sales_cost_rows(
     sales_records: list[dict[str, Any]],
     purchase_records: list[dict[str, Any]],
     voucher_metadata: dict[str, Any] | None,
+    reconciliation: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     principal_by_voucher = voucher_principal_map(voucher_metadata)
-    unit_costs = purchase_unit_costs(purchase_records)
+    fifo_by_sale = {
+        row["sale_id"]: row
+        for row in (reconciliation or {}).get("sales_allocations", [])
+        if row.get("in_analysis_period")
+    }
     grouped: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
             "principal": None,
@@ -449,9 +438,16 @@ def principal_sales_cost_rows(
             "sales_amount": 0,
             "cost_amount": 0.0,
             "missing_cost_row_count": 0,
+            "unconfirmed_quantity": 0,
+            "unconfirmed_row_count": 0,
         }
     )
     for row in sales_records:
+        if reconciliation:
+            period_start = (reconciliation.get("metadata") or {}).get("period_start")
+            period_end = (reconciliation.get("metadata") or {}).get("period_end")
+            if period_start and period_end and not (period_start <= row.get("date", "") <= period_end):
+                continue
         voucher_key = f"{row['date']}-{row['voucher']}"
         principal = principal_by_voucher.get(voucher_key, "(원청 없음)")
         group = grouped[principal]
@@ -459,11 +455,14 @@ def principal_sales_cost_rows(
         group["row_count"] += 1
         group["quantity"] += row.get("quantity") or 0
         group["sales_amount"] += row.get("total_amount") or 0
-        unit_cost = unit_costs.get(row.get("product_id"))
-        if unit_cost is None:
+        sale = fifo_by_sale.get(sale_key(row))
+        if sale is None:
             group["missing_cost_row_count"] += 1
             continue
-        group["cost_amount"] += (row.get("quantity") or 0) * unit_cost
+        group["cost_amount"] += sale.get("fifo_cost_amount") or 0
+        if sale.get("unconfirmed_quantity"):
+            group["unconfirmed_quantity"] += sale["unconfirmed_quantity"]
+            group["unconfirmed_row_count"] += 1
 
     rows: list[dict[str, Any]] = []
     for values in grouped.values():
@@ -480,9 +479,15 @@ def principal_sales_cost_rows(
                 "margin_amount": margin_amount,
                 "margin_rate": (margin_amount / sales_amount * 100) if sales_amount else None,
                 "missing_cost_row_count": values["missing_cost_row_count"],
+                "unconfirmed_quantity": values["unconfirmed_quantity"],
+                "unconfirmed_row_count": values["unconfirmed_row_count"],
             }
         )
     return sorted(rows, key=lambda row: row["sales_amount"], reverse=True)
+
+
+def sale_key(row: dict[str, Any]) -> str:
+    return f"{row.get('date')}|{row.get('voucher')}|{row.get('excel_row')}"
 
 
 def render_principal_margin_chart(rows: list[dict[str, Any]]) -> str:
@@ -522,7 +527,7 @@ def render_principal_margin_chart(rows: list[dict[str, Any]]) -> str:
       <div class="chart-wrap" aria-label="원청별 매출 원가 마진 그래프">
         <svg viewBox="0 0 {chart_width} {chart_height}" role="img" aria-labelledby="principal-chart-title principal-chart-desc">
           <title id="principal-chart-title">원청별 매출/원가/마진</title>
-          <desc id="principal-chart-desc">원청별 매출금액, 추정 매출원가, 마진율을 비교한 그래프</desc>
+          <desc id="principal-chart-desc">원청별 매출금액, FIFO 매출원가, 마진율을 비교한 그래프</desc>
           <g>
             {''.join(elements)}
           </g>
@@ -542,6 +547,7 @@ def render_principal_margin_rows(rows: list[dict[str, Any]]) -> str:
             <td class="money">{money(row['cost_amount'])}</td>
             <td class="money">{money(row['margin_amount'])}</td>
             <td class="money">{percent(row['margin_rate'])}</td>
+            <td class="money">{number(row.get('unconfirmed_quantity', 0))}</td>
           </tr>
         """
         for index, row in enumerate(rows, start=1)
@@ -642,24 +648,26 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     purchase_meta = sources["purchase"]["metadata"]
     sales_meta = sources["sales"]["metadata"]
     inventory_meta = sources["inventory"]["metadata"]
-    reconciliation = sources["reconciliation"]["summary"]
+    reconciliation_payload = sources["reconciliation"]
+    reconciliation = reconciliation_payload["summary"]
 
     period = period_label(purchase_meta, sales_meta)
     generated = date.today().isoformat()
     purchase_amount = reconciliation["purchase_amount"]
     sales_amount = reconciliation["sales_amount"]
-    inventory_average = reconciliation["inventory_amount_at_average_cost"]
-    remainder_average = reconciliation["remainder_at_average_cost"]
+    inventory_fifo = reconciliation.get("inventory_amount_at_fifo", reconciliation.get("ending_fifo_inventory_amount", 0))
+    remainder_fifo = reconciliation.get("remainder_at_fifo", reconciliation.get("gross_profit", 0))
     amount_balance_chart = render_amount_balance_chart(
         purchase_amount,
         sales_amount,
-        inventory_average,
-        remainder_average,
+        inventory_fifo,
+        remainder_fifo,
     )
     weekly_amounts = weekly_purchase_sales_amounts(
         sources["purchase"]["records"],
         sources["sales"]["records"],
         sources["inventory"]["records"],
+        reconciliation_payload,
     )
     include_plotlyjs = include_plotlyjs_option(spec.get("plotly", {}).get("include_plotlyjs", "inline"))
     weekly_chart_spec = spec["charts"]["weekly_purchase_sales"]
@@ -673,6 +681,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         sources["sales"]["records"],
         sources["purchase"]["records"],
         sources.get("sales_voucher_metadata"),
+        reconciliation_payload,
     )
     principal_chart = figure_html(
         principal_margin_figure(pd.DataFrame(principal_rows), principal_chart_spec),
@@ -691,10 +700,10 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     )
 
     amount_rows = [
-        ("매출금액", "기간 내 매출 상세 합계", money(sales_amount)),
-        ("재고금액", "재고수량 x 평균원가", money(inventory_average)),
-        ("매입금액", "기간 내 매입 상세 합계", money(purchase_amount)),
-        ("이익", "매출금액 + 평균원가 기준 재고금액 - 매입금액", money(remainder_average)),
+        ("매출금액", "분석기간 매출 상세 합계", money(sales_amount)),
+        ("재고금액", "분석 종료일 잔여 FIFO 원가층", money(inventory_fifo)),
+        ("매입원가", "분석기간 매입수량 × 매입단가", money(reconciliation.get("period_purchase_cost_amount", purchase_amount))),
+        ("매출총이익", "분석기간 매출금액 - FIFO 매출원가", money(reconciliation.get("gross_profit", remainder_fifo))),
     ]
     amount_table = "\n".join(
         f"""
@@ -1050,7 +1059,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
             {amount_table}
           </tbody>
         </table>
-        <p class="formula">이익 = 매출금액 + 재고금액 - 매입금액. 재고금액은 평균원가 기준이다.</p>
+        <p class="formula">FIFO 매출원가와 FIFO 잔여 원가층을 사용했다. 재고 시트의 평균원가·최종매입가는 계산에 사용하지 않는다.</p>
       </section>
     </article>
 
@@ -1059,7 +1068,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     <article class="report-page report-page--analysis">
       <section class="page-panel" aria-labelledby="weekly-title">
         <h2 id="weekly-title">{escape(weekly_chart_spec['title'])}</h2>
-        <p class="section-note">월요일 시작 주 단위로 매출금액과 현재 평균원가 기준 매출원가를 합산했다.</p>
+        <p class="section-note">월요일 시작 주 단위로 매출금액과 매출별 FIFO 배정 매출원가를 합산했다.</p>
         <p class="section-note">축: {escape(weekly_chart_spec.get('x_axis_title', '주 시작일'))} / {escape(weekly_chart_spec.get('y_axis_title', '금액'))}</p>
         <p class="section-note">표시 단위: {escape(weekly_chart_spec.get('unit_label', '원'))}</p>
         <div class="legend">
@@ -1091,7 +1100,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     <article class="report-page report-page--analysis">
       <section class="page-panel" aria-labelledby="principal-title">
         <h2 id="principal-title">{escape(principal_chart_spec['title'])}</h2>
-        <p class="section-note">매출 전표의 원청 메타데이터를 기준으로 묶었다. 매출원가는 기간 내 매입을 제품별 단가 기준으로 환산한 추정값이다.</p>
+        <p class="section-note">매출 전표의 원청 메타데이터를 기준으로 묶었다. 매출원가는 각 매출에 실제 배정된 FIFO 원가의 합계다.</p>
         <p class="section-note">축: {escape(principal_chart_spec.get('y_axis_title', '원청'))} / {escape(principal_chart_spec.get('x_axis_title', '금액'))}</p>
         <p class="section-note">표시 단위: {escape(principal_chart_spec.get('unit_label', '원'))}</p>
         <div class="legend">
@@ -1110,6 +1119,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
                 <th class="money">매출원가</th>
                 <th class="money">마진금액</th>
                 <th class="money">마진율</th>
+                <th class="money">미확정 수량</th>
               </tr>
             </thead>
             <tbody>

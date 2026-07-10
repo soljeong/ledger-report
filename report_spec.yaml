@@ -1,6 +1,6 @@
 report:
   title: "매입/매출 재고 분석 보고서"
-  scope: "요약, 금액 대사, 주간 재고흐름, 주간 매출, 원청별 매출"
+  scope: "FIFO 요약, 금액 대사, 주간 재고흐름, 주간 매출, 원청별 FIFO 매출원가"
 
 plotly:
   include_plotlyjs: inline
@@ -33,7 +33,7 @@ charts:
         label: "주간 매입 증가"
         color: "#2f6f7e"
       outbound_cost_estimate:
-        label: "주간 출고 감소(추정원가)"
+        label: "주간 출고 감소(FIFO 원가)"
         color: "#c47a23"
       sales_amount:
         label: "주간 매출금액"

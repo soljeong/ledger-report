@@ -87,17 +87,24 @@ def weekly_inventory_flow_rows(
     purchase_records: list[dict[str, Any]],
     sales_records: list[dict[str, Any]],
     inventory_records: list[dict[str, Any]],
+    reconciliation: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Estimate weekly inventory value using current average cost as the outbound cost proxy."""
-    purchase_df = _numeric_frame(purchase_records, ("quantity", "supply_amount", "product_id"))
+    """Build weekly inventory flow from period purchase costs and FIFO sale costs."""
+    purchase_df = _numeric_frame(purchase_records, ("quantity", "supply_amount", "unit_price", "product_id"))
     sales_df = _numeric_frame(sales_records, ("quantity", "supply_amount", "total_amount", "product_id"))
-    inventory_df = _numeric_frame(inventory_records, ("stock_quantity", "average_cost", "product_id"))
 
     for frame in (purchase_df, sales_df):
         if "date" not in frame:
             frame["date"] = pd.Series(dtype="datetime64[ns]")
         frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
         frame.dropna(subset=["date"], inplace=True)
+
+    metadata = (reconciliation or {}).get("metadata", {})
+    period_start = metadata.get("period_start")
+    period_end = metadata.get("period_end")
+    if period_start and period_end:
+        purchase_df = purchase_df[(purchase_df["date"] >= pd.Timestamp(period_start)) & (purchase_df["date"] <= pd.Timestamp(period_end))].copy()
+        sales_df = sales_df[(sales_df["date"] >= pd.Timestamp(period_start)) & (sales_df["date"] <= pd.Timestamp(period_end))].copy()
 
     date_starts = [
         value
@@ -118,29 +125,25 @@ def weekly_inventory_flow_rows(
     if not date_starts or not date_ends:
         return []
 
-    inventory_df["current_stock_amount"] = inventory_df["stock_quantity"] * inventory_df["average_cost"]
-    current_stock_amount = float(inventory_df["current_stock_amount"].sum())
-
-    if sales_df.empty:
-        sales_cost = sales_df.copy()
-        sales_cost["sales_cost_proxy"] = pd.Series(dtype="float64")
-    else:
-        sales_cost = sales_df.merge(
-            inventory_df[["product_id", "average_cost"]],
-            on="product_id",
-            how="left",
-        )
-        sales_cost["average_cost"] = pd.to_numeric(sales_cost["average_cost"], errors="coerce").fillna(0)
-        sales_cost["sales_cost_proxy"] = sales_cost["quantity"] * sales_cost["average_cost"]
+    fifo_costs = {
+        row["sale_id"]: float(row.get("fifo_cost_amount") or 0)
+        for row in (reconciliation or {}).get("sales_allocations", [])
+        if row.get("in_analysis_period")
+    }
+    sales_df["sale_id"] = sales_df.apply(
+        lambda row: f"{row.get('date').date().isoformat()}|{row.get('voucher')}|{row.get('excel_row')}", axis=1
+    ) if not sales_df.empty else pd.Series(dtype="object")
+    sales_df["fifo_cost"] = sales_df["sale_id"].map(fifo_costs).fillna(0) if not sales_df.empty else pd.Series(dtype="float64")
+    purchase_df["purchase_cost"] = purchase_df["quantity"] * purchase_df.get("unit_price", 0) if "unit_price" in purchase_df else purchase_df["supply_amount"]
 
     daily = pd.DataFrame(index=pd.date_range(min(date_starts), max(date_ends), freq="D"))
-    daily["purchase_increase"] = purchase_df.groupby("date")["supply_amount"].sum()
+    daily["purchase_increase"] = purchase_df.groupby("date")["purchase_cost"].sum()
     daily["sales_amount"] = sales_df.groupby("date")["total_amount"].sum()
-    daily["outbound_cost_estimate"] = sales_cost.groupby("date")["sales_cost_proxy"].sum()
+    daily["outbound_cost_estimate"] = sales_df.groupby("date")["fifo_cost"].sum()
     daily = daily.fillna(0)
     daily["net_change"] = daily["purchase_increase"] - daily["outbound_cost_estimate"]
 
-    opening_stock_amount = current_stock_amount - float(daily["net_change"].sum())
+    opening_stock_amount = float((reconciliation or {}).get("summary", {}).get("opening_stock_amount", 0))
     daily["estimated_inventory_amount"] = opening_stock_amount + daily["net_change"].cumsum()
     daily["week_start"] = [
         _base.week_start(timestamp.date().isoformat()).isoformat() for timestamp in daily.index.to_pydatetime()
@@ -196,11 +199,15 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     purchase_records = sources["purchase"]["records"]
     sales_records = sources["sales"]["records"]
     inventory_records = sources["inventory"]["records"]
-    reconciliation = sources["reconciliation"]["summary"]
+    reconciliation_payload = sources["reconciliation"]
+    reconciliation = reconciliation_payload["summary"]
 
     summary_rows_html = "\n".join(
         [
-            _base.summary_row("분석 기간", _base.period_label(purchase_meta, sales_meta)),
+            _base.summary_row("분석 기간", reconciliation_payload.get("metadata", {}).get("period_start", _base.period_label(purchase_meta, sales_meta)) + " ~ " + reconciliation_payload.get("metadata", {}).get("period_end", "")),
+            _base.summary_row("재고 기준일", reconciliation_payload.get("metadata", {}).get("inventory_date", "-")),
+            _base.summary_row("입력 데이터 최종 거래일", reconciliation_payload.get("metadata", {}).get("input_data_last_transaction_date", "-")),
+            _base.summary_row("후속 원가보충 최종 매입일", reconciliation_payload.get("metadata", {}).get("backfill_last_purchase_date", "없음")),
             _base.summary_row(
                 "거래 규모",
                 f"매입 상세 {_base.number(purchase_meta['record_count'])}건 / 매출 상세 {_base.number(sales_meta['record_count'])}건",
@@ -221,22 +228,18 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         label="summary list",
     )
 
-    purchase_amount = reconciliation["purchase_amount"]
+    purchase_amount = reconciliation.get("period_purchase_cost_amount", reconciliation["purchase_amount"])
     sales_amount = reconciliation["sales_amount"]
-    inventory_amount = reconciliation["inventory_amount_at_average_cost"]
-    reconciliation_remainder = reconciliation["remainder_at_average_cost"]
-    inventory_cost_by_product = {
-        row.get("product_id"): float(row.get("average_cost") or 0)
-        for row in inventory_records
-        if row.get("product_id") is not None
-    }
-    estimated_sales_cost = int(
-        round(
-            sum(
-                (row.get("quantity") or 0) * inventory_cost_by_product.get(row.get("product_id"), 0)
-                for row in sales_records
-            )
-        )
+    inventory_amount = reconciliation.get("inventory_amount_at_fifo", reconciliation.get("ending_fifo_inventory_amount", 0))
+    reconciliation_remainder = reconciliation.get("remainder_at_fifo", reconciliation.get("gross_profit", 0))
+    fifo_sales_cost = reconciliation.get("fifo_sales_cost_amount", 0)
+    status_rows = "".join(
+        f"<li><code>{escape(status)}</code>: {_base.number(count)}개 품목</li>"
+        for status, count in reconciliation.get("cost_status_counts", {}).items()
+    )
+    reconciliation_rows = "".join(
+        f"<li>{escape(status)}: {_base.number(count)}개</li>"
+        for status, count in reconciliation.get("reconciliation_status_counts", {}).items()
     )
 
     original_balance_chart = _base.render_amount_balance_chart(
@@ -254,13 +257,13 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     html = _replace_once(html, original_balance_chart, amount_balance_chart, "amount balance chart")
 
     amount_rows = [
-        ("총 매입금액", "기간 내 매입 상세 합계", _base.money(purchase_amount)),
+        ("총 매입원가", "분석기간 매입수량 × 매입단가", _base.money(purchase_amount)),
         ("총 매출금액", "기간 내 매출 상세 합계", _base.money(sales_amount)),
-        ("추정 매출원가", "매출수량 × 현재 평균원가", _base.money(estimated_sales_cost)),
-        ("현재 재고금액", "현재 재고수량 × 평균원가", _base.money(inventory_amount)),
+        ("FIFO 매출원가", "각 매출에 실제 배정된 FIFO 원가층 합계", _base.money(fifo_sales_cost)),
+        ("FIFO 재고금액", "분석 종료일 정상 잔여 원가층 합계", _base.money(inventory_amount)),
         (
-            "대사 잔여금액",
-            "총 매출금액 + 현재 재고금액 - 총 매입금액",
+            "매출총이익",
+            "매출금액 + FIFO 재고금액 - 매입원가",
             _base.money(reconciliation_remainder),
         ),
     ]
@@ -285,10 +288,9 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     )
     html = _replace_once(
         html,
-        '<p class="formula">이익 = 매출금액 + 재고금액 - 매입금액. 재고금액은 평균원가 기준이다.</p>',
-        '<p class="formula">추정 매출원가 = 매출수량 × 현재 평균원가. '
-        '대사 잔여금액 = 총 매출금액 + 현재 재고금액 - 총 매입금액.</p>\n'
-        '        <p class="section-note">추정 매출원가는 매출수량 × 현재 평균원가 기준이며 확정 회계 원가와 다를 수 있다.</p>',
+        '<p class="formula">FIFO 매출원가와 FIFO 잔여 원가층을 사용했다. 재고 시트의 평균원가·최종매입가는 계산에 사용하지 않는다.</p>',
+        '<p class="formula">FIFO 매출원가는 매출별 원가배정 합계다. FIFO 재고금액은 분석 종료일 정상 잔여 원가층 합계다.</p>\n'
+        '        <p class="section-note">후속 매입은 종료일 이전 미확정 출고를 확정하는 데만 사용하며 종료일 재고금액에는 포함하지 않는다.</p>',
         "amount reconciliation formula",
     )
 
@@ -297,6 +299,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         purchase_records,
         sales_records,
         inventory_records,
+        reconciliation_payload,
     )
     include_plotlyjs = _base.include_plotlyjs_option(spec.get("plotly", {}).get("include_plotlyjs", "inline"))
     chart = _base.figure_html(
@@ -307,7 +310,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     <article class="report-page report-page--analysis">
       <section class="page-panel" aria-labelledby="inventory-flow-title">
         <h2 id="inventory-flow-title">{escape(chart_spec['title'])}</h2>
-        <p class="section-note">매입은 공급금액으로 증가, 출고는 매출수량 × 현재 평균원가로 감소시켰다. 현재재고에서 기간 순증감을 역산해 기초재고를 추정한다.</p>
+        <p class="section-note">매입은 매입단가 기준 원가로 증가, 출고는 매출별 FIFO 배정원가로 감소시켰다.</p>
         <p class="section-note">주 시작일 기준으로 묶었고, 막대는 주간 매입 증가·주간 출고 감소·주간 매출금액, 선은 주말 추정 재고금액이다.</p>
         <p class="section-note">표시 단위: {escape(chart_spec.get('unit_label', '백만원'))}</p>
         <div class="legend">
@@ -323,7 +326,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
               <tr>
                 <th>주 시작일</th>
                 <th class="money">매입 증가</th>
-                <th class="money">출고 감소(추정원가)</th>
+                <th class="money">출고 감소(FIFO 원가)</th>
                 <th class="money">순증감</th>
                 <th class="money">추정 재고금액</th>
               </tr>
@@ -331,6 +334,17 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
             <tbody>{render_weekly_inventory_flow_table_rows(rows)}</tbody>
           </table>
         </div>
+        <section aria-labelledby="fifo-status-title">
+          <h3 id="fifo-status-title">FIFO 원가 상태</h3>
+          <ul>{status_rows}</ul>
+          <p class="section-note">미확정 출고 {escape(_base.number(reconciliation.get('unconfirmed_quantity', 0)))}개 · 오류 {_base.number(reconciliation.get('error_count', 0))}건</p>
+        </section>
+        <section aria-labelledby="stock-reconciliation-title">
+          <h3 id="stock-reconciliation-title">재고 기준일 수량 대사</h3>
+          <p class="section-note">장부상 계산수량과 재고 시트의 stock_quantity만 비교했다. 재고 시트 단가는 사용하지 않았다.</p>
+          <ul>{reconciliation_rows}</ul>
+          <p class="section-note">불일치 품목 {_base.number(reconciliation.get('quantity_reconciliation_mismatch_count', 0))}개</p>
+        </section>
       </section>
     </article>
     """
