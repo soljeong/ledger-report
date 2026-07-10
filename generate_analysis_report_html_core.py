@@ -113,6 +113,29 @@ def decimal_amount(value: Any) -> Decimal | None:
         return None
 
 
+def validated_quantity(
+    row: dict[str, Any],
+    validation_by_key: dict[tuple[Any, Any, Any, Any, Any], dict[str, Any]] | None = None,
+    *,
+    source: str = "sales",
+) -> Decimal | None:
+    """Return a reportable ledger quantity without turning bad input into zero.
+
+    New reconciliation payloads publish quantity eligibility.  Prefer that
+    contract when it is available; old payloads retain the safe numeric
+    fallback so rendering can still complete without inferring a quantity.
+    """
+    state = (validation_by_key or {}).get(error_key(row, source))
+    if state is not None:
+        if "quantity_eligible" in state:
+            if not state["quantity_eligible"]:
+                return None
+        elif not state.get("quantity_valid", False):
+            return None
+    quantity = decimal_amount(row.get("quantity"))
+    return quantity if quantity is not None and quantity.is_finite() else None
+
+
 def safe_iso_date(value: Any) -> date | None:
     """Parse a record date without letting malformed source rows break HTML."""
     if isinstance(value, date):
@@ -197,7 +220,7 @@ def weekly_purchase_sales_amounts(
 ) -> list[dict[str, Any]]:
     sales_by_day: dict[date, Decimal] = defaultdict(lambda: Decimal("0"))
     cost_by_day: dict[date, Decimal] = defaultdict(lambda: Decimal("0"))
-    quantity_by_day: dict[date, int | float] = defaultdict(int)
+    quantity_by_day: dict[date, Decimal] = defaultdict(lambda: Decimal("0"))
     row_count_by_day: dict[date, int] = defaultdict(int)
     unconfirmed_delta_by_day: dict[date, Decimal] = defaultdict(lambda: Decimal("0"))
     date_values: list[date] = []
@@ -222,6 +245,11 @@ def weekly_purchase_sales_amounts(
         if row.get("date") and in_period(row) and (row.get("affects_revenue") or row.get("affects_fifo_cost"))
     }
     validation_states = (reconciliation or {}).get("transaction_validations", [])
+    quantity_validation_by_key = {
+        error_key(state): state
+        for state in validation_states
+        if state.get("source") == "sales"
+    }
     valid_supply_keys = {
         error_key(state)
         for state in validation_states
@@ -267,7 +295,9 @@ def weekly_purchase_sales_amounts(
             sales_by_day[row_date] += supply_amount
         sale_id = f"{row.get('date')}|{row.get('voucher')}|{row.get('excel_row')}"
         cost_by_day[row_date] += fifo_cost_by_sale.get(sale_id, 0)
-        quantity_by_day[row_date] += row.get("quantity") or 0
+        quantity = validated_quantity(row, quantity_validation_by_key)
+        if quantity is not None:
+            quantity_by_day[row_date] += quantity
         row_count_by_day[row_date] += 1
         if key in margin_error_keys or sale_id in related_backfill_sale_ids:
             errors_by_day[row_date] += 1
@@ -279,7 +309,7 @@ def weekly_purchase_sales_amounts(
         return []
 
     grouped: dict[date, dict[str, Any]] = defaultdict(
-        lambda: {"row_count": 0, "quantity": 0, "sales_amount": Decimal("0"), "cost_amount": Decimal("0"), "unconfirmed_quantity_delta": Decimal("0"), "current_unconfirmed_quantity": Decimal("0"), "error_count": 0, "amount_validation_error_count": 0, "amount_validation_statuses": set()}
+        lambda: {"row_count": 0, "quantity": Decimal("0"), "sales_amount": Decimal("0"), "cost_amount": Decimal("0"), "unconfirmed_quantity_delta": Decimal("0"), "current_unconfirmed_quantity": Decimal("0"), "error_count": 0, "amount_validation_error_count": 0, "amount_validation_statuses": set()}
     )
     current = min(date_values)
     end_date = max(date_values)
@@ -614,6 +644,11 @@ def principal_sales_cost_rows(
         and (error.get("affects_revenue") or error.get("affects_fifo_cost"))
     }
     validation_states = (reconciliation or {}).get("transaction_validations", [])
+    quantity_validation_by_key = {
+        error_key(state): state
+        for state in validation_states
+        if state.get("source") == "sales"
+    }
     valid_supply_keys = {
         error_key(state)
         for state in validation_states
@@ -641,7 +676,9 @@ def principal_sales_cost_rows(
         group = grouped[principal]
         group["principal"] = principal
         group["row_count"] += 1
-        group["quantity"] += row.get("quantity") or 0
+        quantity = validated_quantity(row, quantity_validation_by_key)
+        if quantity is not None:
+            group["quantity"] += quantity
         supply_amount = decimal_amount(row.get("supply_amount"))
         key = error_key(row, "sales")
         if supply_amount is not None and (not validation_states or key in valid_supply_keys):
