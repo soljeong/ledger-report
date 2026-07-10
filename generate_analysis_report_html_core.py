@@ -5,6 +5,7 @@ import argparse
 import json
 from collections import defaultdict
 from datetime import date, timedelta
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -102,6 +103,28 @@ def summary_row(title: str, value: str, note: str = "") -> str:
     """
 
 
+def decimal_amount(value: Any) -> Decimal | None:
+    """Return a valid amount without treating a VAT-inclusive total as supply."""
+    if value in (None, ""):
+        return None
+    try:
+        return Decimal(str(value).replace(",", "").strip())
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def event_cost_amount(row: dict[str, Any]) -> Decimal:
+    return decimal_amount(row.get("cost_amount_exact")) or decimal_amount(row.get("cost_amount")) or Decimal("0")
+
+
+def rounded_amount(value: Decimal) -> int:
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def error_key(row: dict[str, Any], source: str | None = None) -> tuple[Any, Any, Any, Any, Any]:
+    return (source or row.get("source"), row.get("date"), row.get("voucher"), row.get("excel_row"), row.get("product_id"))
+
+
 def top_sales_by_company(records: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
     """Rank revenue using supply amounts; total_amount is VAT-inclusive cash."""
     grouped: dict[str, dict[str, Any]] = defaultdict(lambda: {"row_count": 0, "quantity": 0, "total_amount": 0})
@@ -109,7 +132,9 @@ def top_sales_by_company(records: list[dict[str, Any]], limit: int = 10) -> list
         company = row.get("company") or "(거래처 없음)"
         grouped[company]["row_count"] += 1
         grouped[company]["quantity"] += row.get("quantity") or 0
-        grouped[company]["total_amount"] += row.get("supply_amount", row.get("total_amount", 0)) or 0
+        supply_amount = decimal_amount(row.get("supply_amount"))
+        if supply_amount is not None:
+            grouped[company]["total_amount"] += supply_amount
 
     rows = [
         {
@@ -133,7 +158,9 @@ def top_sales_by_item(records: list[dict[str, Any]], limit: int = 10) -> list[di
         grouped[key]["item_name"] = row.get("item_name")
         grouped[key]["row_count"] += 1
         grouped[key]["quantity"] += row.get("quantity") or 0
-        grouped[key]["total_amount"] += row.get("supply_amount", row.get("total_amount", 0)) or 0
+        supply_amount = decimal_amount(row.get("supply_amount"))
+        if supply_amount is not None:
+            grouped[key]["total_amount"] += supply_amount
 
     rows = list(grouped.values())
     return sorted(rows, key=lambda row: row["total_amount"], reverse=True)[:limit]
@@ -150,8 +177,8 @@ def weekly_purchase_sales_amounts(
     inventory_records: list[dict[str, Any]],
     reconciliation: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    sales_by_day: dict[date, int | float] = defaultdict(int)
-    cost_by_day: dict[date, int | float] = defaultdict(int)
+    sales_by_day: dict[date, Decimal] = defaultdict(lambda: Decimal("0"))
+    cost_by_day: dict[date, Decimal] = defaultdict(lambda: Decimal("0"))
     quantity_by_day: dict[date, int | float] = defaultdict(int)
     row_count_by_day: dict[date, int] = defaultdict(int)
     unconfirmed_by_day: dict[date, float] = defaultdict(float)
@@ -161,13 +188,20 @@ def weekly_purchase_sales_amounts(
     def in_period(row: dict[str, Any]) -> bool:
         return not period_start or not period_end or period_start <= row.get("date", "") <= period_end
     fifo_cost_by_sale = {
-        row["transaction_id"]: float(row.get("cost_amount") or 0)
+        row["transaction_id"]: event_cost_amount(row)
         for row in (reconciliation or {}).get("sales_cost_events", [])
-        if in_period(row)
+        if in_period(row) and row.get("event_type") in {"sale", "sale_cancellation"}
     }
-    for row in (reconciliation or {}).get("sales_cost_events", []):
+    for row in (reconciliation or {}).get("unconfirmed_quantity_events", (reconciliation or {}).get("sales_cost_events", [])):
         if in_period(row) and row.get("event_type") in {"sale", "sale_cancellation"}:
-            unconfirmed_by_day[date.fromisoformat(row["date"])] += float(row.get("unconfirmed_quantity") or 0)
+            unconfirmed_by_day[date.fromisoformat(row["date"])] += float(row.get("unconfirmed_quantity_delta") or 0)
+
+    error_keys = {
+        error_key(row)
+        for row in (reconciliation or {}).get("errors", [])
+        if row.get("date") and in_period(row) and (row.get("affects_revenue") or row.get("affects_fifo_cost"))
+    }
+    errors_by_day: dict[date, int] = defaultdict(int)
 
     for row in purchase_records:
         if in_period(row):
@@ -176,18 +210,22 @@ def weekly_purchase_sales_amounts(
         if not in_period(row):
             continue
         row_date = date.fromisoformat(row["date"])
-        sales_by_day[row_date] += row.get("supply_amount", row.get("total_amount", 0)) or 0
+        supply_amount = decimal_amount(row.get("supply_amount"))
+        if supply_amount is not None and error_key(row, "sales") not in error_keys:
+            sales_by_day[row_date] += supply_amount
         sale_id = f"{row.get('date')}|{row.get('voucher')}|{row.get('excel_row')}"
         cost_by_day[row_date] += fifo_cost_by_sale.get(sale_id, 0)
         quantity_by_day[row_date] += row.get("quantity") or 0
         row_count_by_day[row_date] += 1
+        if error_key(row, "sales") in error_keys:
+            errors_by_day[row_date] += 1
         date_values.append(row_date)
 
     if not date_values:
         return []
 
     grouped: dict[date, dict[str, Any]] = defaultdict(
-        lambda: {"row_count": 0, "quantity": 0, "sales_amount": 0, "cost_amount": 0, "unconfirmed_quantity": 0}
+        lambda: {"row_count": 0, "quantity": 0, "sales_amount": Decimal("0"), "cost_amount": Decimal("0"), "unconfirmed_quantity": 0, "error_count": 0}
     )
     current = min(date_values)
     end_date = max(date_values)
@@ -197,13 +235,16 @@ def weekly_purchase_sales_amounts(
         grouped[week_start(current.isoformat())]["sales_amount"] += sales_by_day.get(current, 0)
         grouped[week_start(current.isoformat())]["cost_amount"] += cost_by_day.get(current, 0)
         grouped[week_start(current.isoformat())]["unconfirmed_quantity"] += unconfirmed_by_day.get(current, 0)
+        grouped[week_start(current.isoformat())]["error_count"] += errors_by_day.get(current, 0)
         current += timedelta(days=1)
 
     result: list[dict[str, Any]] = []
     for start in sorted(grouped):
         sales_amount = grouped[start]["sales_amount"]
-        cost_amount = int(round(grouped[start]["cost_amount"]))
+        sales_amount = rounded_amount(sales_amount)
+        cost_amount = rounded_amount(grouped[start]["cost_amount"])
         margin_amount = sales_amount - cost_amount
+        margin_status = "error" if grouped[start]["error_count"] else ("provisional" if grouped[start]["unconfirmed_quantity"] else "confirmed")
         result.append(
             {
                 "week_start": start.isoformat(),
@@ -213,8 +254,10 @@ def weekly_purchase_sales_amounts(
                 "sales_amount": sales_amount,
                 "cost_amount": cost_amount,
                 "margin_amount": margin_amount,
-                "margin_rate": (margin_amount / sales_amount * 100) if sales_amount and not grouped[start]["unconfirmed_quantity"] else None,
+                "margin_rate": (margin_amount / sales_amount * 100) if sales_amount and margin_status == "confirmed" else None,
                 "unconfirmed_quantity": grouped[start]["unconfirmed_quantity"],
+                "error_count": grouped[start]["error_count"],
+                "margin_status": margin_status,
             }
         )
     return result
@@ -396,7 +439,8 @@ def render_weekly_table_rows(rows: list[dict[str, Any]]) -> str:
             <td class="money">{money(row['sales_amount'])}</td>
             <td class="money">{money(row['cost_amount'])}</td>
             <td class="money">{money(row['margin_amount'])}</td>
-            <td class="money">{percent(row['margin_rate'])}</td>
+            <td><code>{escape(str(row.get('margin_status', 'confirmed')))}</code></td>
+            <td class="money">{percent(row['margin_rate']) if row.get('margin_status') == 'confirmed' else ('오류' if row.get('margin_status') == 'error' else '잠정')}</td>
           </tr>
         """
         for row in rows
@@ -447,18 +491,31 @@ def principal_sales_cost_rows(
             for row in (reconciliation or {}).get("sales_allocations", [])
             if row.get("in_analysis_period")
         }
+    unconfirmed_delta_by_transaction: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    for event in (reconciliation or {}).get("unconfirmed_quantity_events", (reconciliation or {}).get("sales_cost_events", [])):
+        if event.get("event_type") not in {"sale", "sale_cancellation", "shortage_backfill"}:
+            continue
+        transaction_id = event.get("sale_transaction_id") if event.get("event_type") == "shortage_backfill" else event.get("transaction_id")
+        if transaction_id:
+            unconfirmed_delta_by_transaction[transaction_id] += decimal_amount(event.get("unconfirmed_quantity_delta")) or Decimal("0")
     grouped: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
             "principal": None,
             "row_count": 0,
             "quantity": 0,
-            "sales_amount": 0,
-            "cost_amount": 0.0,
+            "sales_amount": Decimal("0"),
+            "cost_amount": Decimal("0"),
             "missing_cost_row_count": 0,
             "unconfirmed_quantity": 0,
             "unconfirmed_row_count": 0,
+            "error_count": 0,
         }
     )
+    error_keys = {
+        error_key(error)
+        for error in (reconciliation or {}).get("errors", [])
+        if error.get("source") == "sales" and (error.get("affects_revenue") or error.get("affects_fifo_cost"))
+    }
     for row in sales_records:
         if reconciliation:
             period_start = (reconciliation.get("metadata") or {}).get("period_start")
@@ -471,21 +528,31 @@ def principal_sales_cost_rows(
         group["principal"] = principal
         group["row_count"] += 1
         group["quantity"] += row.get("quantity") or 0
-        group["sales_amount"] += row.get("supply_amount", row.get("total_amount", 0)) or 0
+        supply_amount = decimal_amount(row.get("supply_amount"))
+        if supply_amount is not None and error_key(row, "sales") not in error_keys:
+            group["sales_amount"] += supply_amount
         sale = fifo_by_sale.get(sale_key(row))
         if sale is None:
             group["missing_cost_row_count"] += 1
             continue
-        group["cost_amount"] += sale.get("cost_amount") or 0
-        if sale.get("event_type") in {"sale", "sale_cancellation"} and sale.get("unconfirmed_quantity"):
-            group["unconfirmed_quantity"] += sale["unconfirmed_quantity"]
+        group["cost_amount"] += event_cost_amount(sale)
+        unconfirmed_delta = unconfirmed_delta_by_transaction.get(sale_key(row), Decimal("0"))
+        if unconfirmed_delta:
+            group["unconfirmed_quantity"] += float(unconfirmed_delta)
             group["unconfirmed_row_count"] += 1
+
+    for row in sales_records:
+        if error_key(row, "sales") not in error_keys:
+            continue
+        voucher_key = f"{row['date']}-{row['voucher']}"
+        grouped[principal_by_voucher.get(voucher_key, "(원청 없음)")]["error_count"] += 1
 
     rows: list[dict[str, Any]] = []
     for values in grouped.values():
-        sales_amount = values["sales_amount"]
-        cost_amount = int(round(values["cost_amount"]))
+        sales_amount = rounded_amount(values["sales_amount"])
+        cost_amount = rounded_amount(values["cost_amount"])
         margin_amount = sales_amount - cost_amount
+        margin_status = "error" if values["error_count"] or values["missing_cost_row_count"] else ("provisional" if values["unconfirmed_quantity"] else "confirmed")
         rows.append(
             {
                 "principal": values["principal"],
@@ -494,10 +561,12 @@ def principal_sales_cost_rows(
                 "sales_amount": sales_amount,
                 "cost_amount": cost_amount,
                 "margin_amount": margin_amount,
-                "margin_rate": (margin_amount / sales_amount * 100) if sales_amount and not values["unconfirmed_quantity"] else None,
+                "margin_rate": (margin_amount / sales_amount * 100) if sales_amount and margin_status == "confirmed" else None,
                 "missing_cost_row_count": values["missing_cost_row_count"],
                 "unconfirmed_quantity": values["unconfirmed_quantity"],
                 "unconfirmed_row_count": values["unconfirmed_row_count"],
+                "error_count": values["error_count"],
+                "margin_status": margin_status,
             }
         )
     return sorted(rows, key=lambda row: row["sales_amount"], reverse=True)
@@ -563,7 +632,8 @@ def render_principal_margin_rows(rows: list[dict[str, Any]]) -> str:
             <td class="money">{money(row['sales_amount'])}</td>
             <td class="money">{money(row['cost_amount'])}</td>
             <td class="money">{money(row['margin_amount'])}</td>
-            <td class="money">{percent(row['margin_rate'])}</td>
+            <td><code>{escape(str(row.get('margin_status', 'confirmed')))}</code></td>
+            <td class="money">{percent(row['margin_rate']) if row.get('margin_status') == 'confirmed' else ('오류' if row.get('margin_status') == 'error' else '잠정')}</td>
             <td class="money">{number(row.get('unconfirmed_quantity', 0))}</td>
           </tr>
         """
@@ -717,10 +787,10 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     )
 
     amount_rows = [
-        ("매출금액", "분석기간 매출 상세 합계", money(sales_amount)),
+        ("매출 공급가액", "분석기간 매출 상세 공급가액 합계 (부가세 제외)", money(sales_amount)),
         ("재고금액", "분석 종료일 잔여 FIFO 원가층", money(inventory_fifo)),
         ("매입원가", "분석기간 매입수량 × 매입단가", money(reconciliation.get("period_purchase_cost_amount", purchase_amount))),
-        ("매출총이익", "분석기간 매출금액 - FIFO 매출원가", money(reconciliation.get("gross_profit", remainder_fifo))),
+        ("매출총이익", "분석기간 매출 공급가액 - FIFO 매출원가", money(reconciliation.get("gross_profit", remainder_fifo))),
     ]
     amount_table = "\n".join(
         f"""
@@ -1086,7 +1156,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     <article class="report-page report-page--analysis">
       <section class="page-panel" aria-labelledby="weekly-title">
         <h2 id="weekly-title">{escape(weekly_chart_spec['title'])}</h2>
-        <p class="section-note">월요일 시작 주 단위로 매출금액과 매출별 FIFO 배정 매출원가를 합산했다.</p>
+        <p class="section-note">월요일 시작 주 단위로 매출 공급가액과 매출별 FIFO 배정 매출원가를 합산했다.</p>
         <p class="section-note">축: {escape(weekly_chart_spec.get('x_axis_title', '주 시작일'))} / {escape(weekly_chart_spec.get('y_axis_title', '금액'))}</p>
         <p class="section-note">표시 단위: {escape(weekly_chart_spec.get('unit_label', '원'))}</p>
         <div class="legend">
@@ -1101,9 +1171,10 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
                 <th>주 시작일</th>
                 <th class="money">건수</th>
                 <th class="money">수량</th>
-                <th class="money">매출금액</th>
+                <th class="money">매출 공급가액</th>
                 <th class="money">매출원가</th>
                 <th class="money">마진금액</th>
+                <th>마진 상태</th>
                 <th class="money">마진율</th>
               </tr>
             </thead>
@@ -1118,11 +1189,11 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     <article class="report-page report-page--analysis">
       <section class="page-panel" aria-labelledby="principal-title">
         <h2 id="principal-title">{escape(principal_chart_spec['title'])}</h2>
-        <p class="section-note">매출 전표의 원청 메타데이터를 기준으로 묶었다. 매출원가는 각 매출에 실제 배정된 FIFO 원가의 합계다.</p>
+        <p class="section-note">매출 전표의 원청 메타데이터를 기준으로 묶었다. 매출 공급가액과 매출원가는 각 거래의 공급가액 및 실제 FIFO 배정원가 합계다.</p>
         <p class="section-note">축: {escape(principal_chart_spec.get('y_axis_title', '원청'))} / {escape(principal_chart_spec.get('x_axis_title', '금액'))}</p>
         <p class="section-note">표시 단위: {escape(principal_chart_spec.get('unit_label', '원'))}</p>
         <div class="legend">
-          <span><i class="revenue-chip"></i>매출금액</span>
+          <span><i class="revenue-chip"></i>매출 공급가액</span>
           <span><i class="outbound-chip"></i>매출원가</span>
         </div>
         {principal_chart}
@@ -1133,9 +1204,10 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
                 <th class="rank">순위</th>
                 <th>원청</th>
                 <th class="money">건수</th>
-                <th class="money">매출금액</th>
+                <th class="money">매출 공급가액</th>
                 <th class="money">매출원가</th>
                 <th class="money">마진금액</th>
+                <th>마진 상태</th>
                 <th class="money">마진율</th>
                 <th class="money">미확정 수량</th>
               </tr>

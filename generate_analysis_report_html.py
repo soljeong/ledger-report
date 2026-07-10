@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 from html import escape
 from pathlib import Path
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 import pandas as pd
@@ -20,6 +21,16 @@ def _numeric_frame(records: list[dict[str, Any]], columns: tuple[str, ...]) -> p
             frame[column] = 0
         frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0)
     return frame
+
+
+def _exact_cost_series(frame: pd.DataFrame) -> pd.Series:
+    """Prefer the serialized Decimal amount; legacy display amount is fallback."""
+    source = frame["cost_amount_exact"] if "cost_amount_exact" in frame else frame.get("cost_amount", pd.Series(0, index=frame.index))
+    return source.map(lambda value: float(Decimal(str(value))) if value not in (None, "") else 0.0)
+
+
+def _display_money(value: Any) -> int:
+    return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def _unique_value_count(records: list[dict[str, Any]], key: str) -> int:
@@ -144,7 +155,7 @@ def weekly_inventory_flow_rows(
     if purchase_events.empty:
         purchase_df["purchase_cost"] = purchase_df["quantity"] * purchase_df.get("unit_price", 0) if "unit_price" in purchase_df else purchase_df["supply_amount"]
     else:
-        purchase_events["purchase_cost"] = pd.to_numeric(purchase_events["cost_amount"], errors="coerce").fillna(0)
+        purchase_events["purchase_cost"] = _exact_cost_series(purchase_events)
     if sales_events.empty:
         fifo_costs = {
             row["sale_id"]: float(row.get("fifo_cost_amount") or 0)
@@ -157,14 +168,14 @@ def weekly_inventory_flow_rows(
         sales_df["outbound_cost"] = sales_df["sale_id"].map(fifo_costs).fillna(0) if not sales_df.empty else 0.0
         sales_df["inventory_cost_delta"] = -sales_df["outbound_cost"]
     else:
-        sales_events["inventory_cost_amount"] = pd.to_numeric(sales_events.get("inventory_cost_amount", 0), errors="coerce").fillna(0)
-        sales_events["cost_amount"] = pd.to_numeric(sales_events["cost_amount"], errors="coerce").fillna(0)
+        sales_events["inventory_cost_amount"] = pd.to_numeric(sales_events.get("inventory_cost_amount_exact", sales_events.get("inventory_cost_amount", 0)), errors="coerce").fillna(0)
+        sales_events["cost_amount"] = _exact_cost_series(sales_events)
         sales_events["inventory_cost_delta"] = sales_events.apply(lambda row: row["inventory_cost_amount"] if row.get("event_type") == "sale_cancellation" else -row["inventory_cost_amount"], axis=1)
         sales_events["outbound_cost"] = sales_events.apply(lambda row: -row["cost_amount"] if row.get("event_type") == "sale_cancellation" else row["cost_amount"], axis=1)
 
     has_inventory_events = not inventory_events.empty
     if has_inventory_events:
-        inventory_events["cost_amount"] = pd.to_numeric(inventory_events["cost_amount"], errors="coerce").fillna(0)
+        inventory_events["cost_amount"] = _exact_cost_series(inventory_events)
         purchase_flow = inventory_events[inventory_events["event_type"].isin(["purchase", "purchase_cancellation"])]
         outbound_flow = inventory_events[~inventory_events["event_type"].isin(["purchase", "purchase_cancellation"])]
     else:
@@ -172,8 +183,9 @@ def weekly_inventory_flow_rows(
         outbound_flow = sales_events
     daily = pd.DataFrame(index=pd.date_range(min(date_starts), max(date_ends), freq="D"))
     daily["purchase_increase"] = purchase_flow.groupby("date")["cost_amount" if "cost_amount" in purchase_flow else "purchase_cost"].sum()
-    sales_column = "supply_amount" if "supply_amount" in sales_df else "total_amount"
-    daily["sales_amount"] = sales_df.groupby("date")[sales_column].sum()
+    # Supply amount is the P&L basis; a missing value is excluded rather than
+    # silently replaced with VAT-inclusive total_amount.
+    daily["sales_amount"] = sales_df.groupby("date")["supply_amount"].sum()
     daily["outbound_cost_estimate"] = (
         -outbound_flow.groupby("date")["cost_amount"].sum()
         if has_inventory_events and not outbound_flow.empty
@@ -206,11 +218,11 @@ def weekly_inventory_flow_rows(
         {
             "week_start": week_start,
             "label": f"{pd.Timestamp(week_start).month}/{pd.Timestamp(week_start).day}",
-            "purchase_increase": float(row["purchase_increase"]),
-            "sales_amount": float(row["sales_amount"]),
-            "outbound_cost_estimate": float(row["outbound_cost_estimate"]),
-            "net_change": float(row["net_change"]),
-            "estimated_inventory_amount": float(row["estimated_inventory_amount"]),
+            "purchase_increase": _display_money(row["purchase_increase"]),
+            "sales_amount": _display_money(row["sales_amount"]),
+            "outbound_cost_estimate": _display_money(row["outbound_cost_estimate"]),
+            "net_change": _display_money(row["net_change"]),
+            "estimated_inventory_amount": _display_money(row["estimated_inventory_amount"]),
         }
         for week_start, row in weekly.iterrows()
     ]
@@ -257,6 +269,25 @@ def render_problem_item_rows(payload: dict[str, Any]) -> str:
         f"<td>{escape(', '.join(error_codes.get(row.get('product_id'), [])) or '-')}</td>"
         "</tr>"
         for row in problems
+    )
+
+
+def render_transaction_error_rows(payload: dict[str, Any]) -> str:
+    errors = [*payload.get("errors", []), *payload.get("warnings", [])]
+    if not errors:
+        return '<tr><td colspan="8">없음</td></tr>'
+    return "\n".join(
+        "<tr>"
+        f"<td>{escape(str(error.get('source') or '-'))}</td>"
+        f"<td>{escape(str(error.get('date') or '-'))}</td>"
+        f"<td>{escape(str(error.get('voucher') or '-'))}</td>"
+        f"<td>{escape(str(error.get('excel_row') or '-'))}</td>"
+        f"<td>{escape(str(error.get('product_id') or '-'))}</td>"
+        f"<td><code>{escape(str(error.get('code') or '-'))}</code></td>"
+        f"<td>{escape(', '.join(name.removeprefix('affects_') for name in ('affects_quantity', 'affects_fifo_cost', 'affects_revenue', 'affects_vat', 'affects_inventory_reconciliation') if error.get(name)) or '-')}</td>"
+        f"<td>{escape(str(error.get('supply_amount', error.get('total_amount', '-'))))}</td>"
+        "</tr>"
+        for error in errors
     )
 
 
@@ -328,6 +359,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         for status, count in reconciliation.get("reconciliation_status_counts", {}).items()
     )
     problem_rows = render_problem_item_rows(reconciliation_payload)
+    transaction_error_rows = render_transaction_error_rows(reconciliation_payload)
 
     if reconciliation.get("gross_profit_status") != "confirmed":
         amount_balance_chart = '<div class="balance-chart-empty" role="note">원가 미확정 또는 계산 오류가 있어 금액 밸런스 차트는 잠정값으로만 검토해야 한다.</div>'
@@ -390,7 +422,8 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         "amount reconciliation formula",
     )
     vat_section = f"""
-        <section aria-labelledby="vat-settlement-title">
+    <article class="report-page report-page--vat">
+      <section class="page-panel" aria-labelledby="vat-settlement-title">
           <h3 id="vat-settlement-title">부가세 정산</h3>
           <p class="section-note">매출총이익은 부가세 제외 손익 지표다. 부가세 정산 후 잔여금액은 현금 관점의 참고값이며 손익이 아니다.</p>
           <table class="amount-table"><tbody>
@@ -404,7 +437,8 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
             <tr><th>{'잠정 참고값' if reconciliation.get('gross_profit_status') != 'confirmed' else '부가세 정산 후 잔여금액'}</th><td class="money">{_base.money(reconciliation.get('post_vat_reference_amount', 0))}</td></tr>
           </tbody></table>
           <p class="section-note">거래금액 검증 오류 {escape(_base.number(reconciliation.get('amount_validation_error_count', 0)))}건 · 정산 상태 <code>{escape(str(reconciliation.get('vat_settlement_status', '-')))}</code></p>
-        </section>
+      </section>
+    </article>
     """
     html = _replace_once(html, "    <!-- REPORT_EXTRA_PAGES -->", f"      {vat_section}\n    <!-- REPORT_EXTRA_PAGES -->", "VAT section insertion")
 
@@ -462,6 +496,10 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         <section aria-labelledby="problem-items-title">
           <h3 id="problem-items-title">문제 품목 상세</h3>
           <div class="table-scroll"><table><thead><tr><th>product_id</th><th>품명</th><th>원가 상태</th><th>미확정 수량</th><th>종료일 음수재고</th><th>기준일 장부수량</th><th>재고 시트 수량</th><th>수량 차이</th><th>수량 대사 상태</th><th>오류/경고</th></tr></thead><tbody>{problem_rows}</tbody></table></div>
+        </section>
+        <section aria-labelledby="transaction-errors-title">
+          <h3 id="transaction-errors-title">거래 단위 오류 상세</h3>
+          <div class="table-scroll"><table><thead><tr><th>source</th><th>date</th><th>voucher</th><th>excel_row</th><th>product_id</th><th>오류 코드</th><th>영향 범위</th><th>관련 금액</th></tr></thead><tbody>{transaction_error_rows}</tbody></table></div>
         </section>
       </section>
     </article>

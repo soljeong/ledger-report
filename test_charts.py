@@ -31,7 +31,7 @@ class ChartFigureTests(unittest.TestCase):
         self.assertEqual(figure.layout.xaxis.title.text, "주 시작일")
         self.assertEqual(figure.layout.yaxis.title.text, "금액")
         self.assertEqual(len(figure.data), 2)
-        self.assertEqual(figure.data[0].name, "매출금액")
+        self.assertEqual(figure.data[0].name, "매출 공급가액")
         self.assertEqual(figure.data[1].name, "매출원가")
         self.assertEqual(figure.layout.barmode, "overlay")
 
@@ -55,7 +55,7 @@ class ChartFigureTests(unittest.TestCase):
         self.assertIsInstance(figure, go.Figure)
         self.assertEqual(figure.layout.xaxis.title.text, "주 시작일")
         self.assertEqual(figure.layout.barmode, "overlay")
-        self.assertEqual(figure.data[2].name, "주간 매출금액")
+        self.assertEqual(figure.data[2].name, "주간 매출 공급가액")
         self.assertEqual(list(figure.data[2].y), [-0.0008])
 
     def test_principal_chart_uses_dataframe_and_report_spec_labels(self) -> None:
@@ -84,7 +84,7 @@ class ChartFigureTests(unittest.TestCase):
         self.assertEqual(figure.layout.xaxis.title.text, "금액")
         self.assertEqual(figure.layout.yaxis.title.text, "원청")
         self.assertEqual(len(figure.data), 2)
-        self.assertEqual(figure.data[0].name, "매출금액")
+        self.assertEqual(figure.data[0].name, "매출 공급가액")
         self.assertEqual(figure.data[1].name, "매출원가")
         self.assertGreaterEqual(figure.layout.margin.r, 120)
         self.assertIs(figure.data[0].cliponaxis, False)

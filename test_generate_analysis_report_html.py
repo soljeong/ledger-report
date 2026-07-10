@@ -23,7 +23,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
     def test_report_renders_fifo_metrics_dates_statuses_and_reconciliation(self):
         html = render_report_html(load_sources(EXAMPLE_DIR))
 
-        self.assertEqual(html.count('class="report-page'), 4)
+        self.assertEqual(html.count('class="report-page'), 5)
         for text in (
             "2026-05-10 ~ 2026-05-20",
             "2026-05-25",
@@ -76,10 +76,10 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertIn(">없음</strong>", html)
 
     def test_period_charts_exclude_outside_sales_and_problem_table_identifies_rows(self):
-        purchases = {"records": [{"date": "2026-01-01", "quantity": 10, "unit_price": 100, "total_amount": 1000, "product_id": 1, "voucher": 1, "excel_row": 1, "item_name": "Item", "specification": "A"}]}
+        purchases = {"records": [{"date": "2026-01-01", "quantity": 10, "unit_price": 100, "supply_amount": 1000, "vat": 0, "total_amount": 1000, "product_id": 1, "voucher": 1, "excel_row": 1, "item_name": "Item", "specification": "A"}]}
         sales = {"records": [
-            {"date": "2026-01-10", "quantity": 2, "total_amount": 400, "product_id": 1, "voucher": 1, "excel_row": 1, "item_name": "Item", "specification": "A"},
-            {"date": "2026-02-10", "quantity": 3, "total_amount": 600, "product_id": 1, "voucher": 2, "excel_row": 2, "item_name": "Item", "specification": "A"},
+            {"date": "2026-01-10", "quantity": 2, "supply_amount": 400, "vat": 0, "total_amount": 400, "product_id": 1, "voucher": 1, "excel_row": 1, "item_name": "Item", "specification": "A"},
+            {"date": "2026-02-10", "quantity": 3, "supply_amount": 600, "vat": 0, "total_amount": 600, "product_id": 1, "voucher": 2, "excel_row": 2, "item_name": "Item", "specification": "A"},
         ]}
         reconciliation = build_reconciliation(purchases, sales, {"records": []}, "2026-01-01", "2026-01-31", "2026-02-28")
         weekly = weekly_purchase_sales_amounts(purchases["records"], sales["records"], [], reconciliation)
@@ -128,6 +128,24 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
             "잠정 매출총이익",
         ):
             self.assertIn(text, html)
+        vat_start = html.index('class="report-page report-page--vat"')
+        vat_end = html.index("</article>", vat_start)
+        self.assertIn('id="vat-settlement-title"', html[vat_start:vat_end])
+
+    def test_weekly_and_principal_margin_statuses_hide_non_final_rates(self):
+        purchase_rows = [
+            {"date": "2026-01-01", "quantity": 1, "unit_price": 100, "supply_amount": 100, "vat": 0, "total_amount": 100, "product_id": 1, "voucher": 1, "excel_row": 1},
+        ]
+        sales_rows = [
+            {"date": "2026-01-02", "quantity": 1, "supply_amount": 100, "vat": 0, "total_amount": 101, "product_id": 1, "voucher": 2, "excel_row": 2},
+        ]
+        reconciliation = build_reconciliation({"records": purchase_rows}, {"records": sales_rows}, {"records": []}, "2026-01-01", "2026-01-31", "2026-01-31")
+        weekly = weekly_purchase_sales_amounts(purchase_rows, sales_rows, [], reconciliation)
+        self.assertEqual(weekly[0]["margin_status"], "error")
+        self.assertIsNone(weekly[0]["margin_rate"])
+        principal = principal_sales_cost_rows(sales_rows, purchase_rows, {"records": [{"voucher_key": "2026-01-02-2", "principal": "P"}]}, reconciliation)
+        self.assertEqual(principal[0]["margin_status"], "error")
+        self.assertIsNone(principal[0]["margin_rate"])
 
 
 if __name__ == "__main__":
