@@ -225,14 +225,19 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     sales_amount = reconciliation["sales_amount"]
     inventory_amount = reconciliation["inventory_amount_at_average_cost"]
     reconciliation_remainder = reconciliation["remainder_at_average_cost"]
-    weekly_sales_rows = _base.weekly_purchase_sales_amounts(
-        purchase_records,
-        sales_records,
-        inventory_records,
+    inventory_cost_by_product = {
+        row.get("product_id"): float(row.get("average_cost") or 0)
+        for row in inventory_records
+        if row.get("product_id") is not None
+    }
+    estimated_sales_cost = int(
+        round(
+            sum(
+                (row.get("quantity") or 0) * inventory_cost_by_product.get(row.get("product_id"), 0)
+                for row in sales_records
+            )
+        )
     )
-    estimated_sales_cost = sum(row["cost_amount"] for row in weekly_sales_rows)
-    estimated_gross_profit = sales_amount - estimated_sales_cost
-    estimated_gross_margin_rate = (estimated_gross_profit / sales_amount * 100) if sales_amount else None
 
     original_balance_chart = _base.render_amount_balance_chart(
         purchase_amount,
@@ -253,8 +258,6 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         ("총 매출금액", "기간 내 매출 상세 합계", _base.money(sales_amount)),
         ("추정 매출원가", "매출수량 × 현재 평균원가", _base.money(estimated_sales_cost)),
         ("현재 재고금액", "현재 재고수량 × 평균원가", _base.money(inventory_amount)),
-        ("추정 매출총이익", "총 매출금액 - 추정 매출원가", _base.money(estimated_gross_profit)),
-        ("추정 매출총이익률", "추정 매출총이익 ÷ 총 매출금액", _base.percent(estimated_gross_margin_rate)),
         (
             "대사 잔여금액",
             "총 매출금액 + 현재 재고금액 - 총 매입금액",
@@ -282,14 +285,8 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     )
     html = _replace_once(
         html,
-        '<th class="money">금액</th>',
-        '<th class="money">값</th>',
-        "amount table value heading",
-    )
-    html = _replace_once(
-        html,
         '<p class="formula">이익 = 매출금액 + 재고금액 - 매입금액. 재고금액은 평균원가 기준이다.</p>',
-        '<p class="formula">추정 매출총이익 = 총 매출금액 - 추정 매출원가. '
+        '<p class="formula">추정 매출원가 = 매출수량 × 현재 평균원가. '
         '대사 잔여금액 = 총 매출금액 + 현재 재고금액 - 총 매입금액.</p>\n'
         '        <p class="section-note">추정 매출원가는 매출수량 × 현재 평균원가 기준이며 확정 회계 원가와 다를 수 있다.</p>',
         "amount reconciliation formula",
