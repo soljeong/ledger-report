@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 import shutil
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import load_workbook
 
 from generate_analysis_report_html_core import build_report_data, load_sources
-from generate_analysis_result_excel import SHEET_NAMES, export_workbook, generate_report
+from generate_analysis_result_excel import SHEET_NAMES, export_workbook, generate_report, load_analysis_sources
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -161,6 +163,28 @@ class GenerateAnalysisResultExcelTests(unittest.TestCase):
         self.assertEqual(self._labeled_row(workbook, "손익분석", "매입 합계금액")[1].value, report_summary["period_purchase_total_amount"])
         self.assertTrue(output.exists())
 
+    def test_chart_data_shortage_is_a_warning_and_skips_only_unsupported_charts(self):
+        sources = copy.deepcopy(load_sources(EXAMPLE_DIR))
+        sources["purchase"]["records"] = []
+        sources["sales"]["records"] = []
+        sources["inventory"]["records"] = []
+        output, workbook = self._create_workbook(sources)
+        validation_codes = {
+            row[1].value
+            for row in workbook["검증결과"].iter_rows(min_row=2, max_col=2)
+        }
+        execution_values = {
+            row[0].value: row[1].value
+            for row in workbook["실행정보"].iter_rows(min_row=2, max_col=2)
+        }
+
+        self.assertEqual(workbook["요약"]["B2"].value, "completed_with_warnings")
+        self.assertIn("chart_data_unavailable", validation_codes)
+        self.assertIn("chart_data_unavailable", execution_values["적용된 경고"])
+        self.assertEqual(len(workbook["요약"]._charts), 1)
+        self.assertIn("건수", str(workbook["요약"]._charts[0].x_axis.title))
+        self.assertTrue(output.exists())
+
     def test_missing_optional_metadata_generates_a_warning_without_inventing_records(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             input_dir = Path(tmpdir) / "input"
@@ -188,6 +212,29 @@ class GenerateAnalysisResultExcelTests(unittest.TestCase):
 
             with self.assertRaisesRegex(FileNotFoundError, "required sales JSON is missing"):
                 generate_report(input_dir, Path(tmpdir) / "analysis_result.xlsx")
+
+    def test_missing_core_reconciliation_result_fails_clearly(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_dir = Path(tmpdir) / "input"
+            shutil.copytree(EXAMPLE_DIR, input_dir)
+            reconciliation_path = input_dir / "inventory_reconciliation.json"
+            reconciliation = json.loads(reconciliation_path.read_text(encoding="utf-8"))
+            del reconciliation["summary"]["gross_profit"]
+            reconciliation_path.write_text(json.dumps(reconciliation), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "required reconciliation results are missing.*gross_profit"):
+                load_analysis_sources(input_dir)
+
+    def test_reopen_failure_does_not_leave_a_partial_final_or_temporary_workbook(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "analysis_result.xlsx"
+
+            with patch("generate_analysis_result_excel.load_workbook", side_effect=OSError("simulated reopen failure")):
+                with self.assertRaisesRegex(OSError, "simulated reopen failure"):
+                    export_workbook(load_sources(EXAMPLE_DIR), output)
+
+            self.assertFalse(output.exists())
+            self.assertEqual(list(Path(tmpdir).glob(".analysis_result.*.xlsx")), [])
 
 
 if __name__ == "__main__":

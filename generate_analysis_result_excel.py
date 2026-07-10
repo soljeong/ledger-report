@@ -9,14 +9,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
+import tempfile
 from collections import Counter
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -47,6 +49,16 @@ REQUIRED_INPUTS = {
 }
 OPTIONAL_INPUTS = {
     "sales_voucher_metadata": ["sales_voucher_metadata.json", f"{report_core.LEGACY_PREFIX}sales_voucher_metadata.json"],
+}
+
+REQUIRED_RECONCILIATION_METADATA_FIELDS = ("period_start", "period_end")
+REQUIRED_RECONCILIATION_SUMMARY_FIELDS = {
+    "period_sales_supply_amount": ("period_sales_supply_amount", "sales_amount"),
+    "fifo_sales_cost_amount": ("fifo_sales_cost_amount",),
+    "gross_profit": ("gross_profit",),
+    "gross_profit_status": ("gross_profit_status", "profit_status"),
+    "ending_fifo_inventory_amount": ("inventory_amount_at_fifo", "ending_fifo_inventory_amount"),
+    "ending_signed_stock_quantity": ("ending_signed_stock_quantity",),
 }
 
 RECORD_COLUMNS = {
@@ -80,6 +92,29 @@ def _resolve_input_paths(input_dir: Path) -> tuple[dict[str, Path], dict[str, Pa
     return required, optional
 
 
+def _present(value: Any) -> bool:
+    return value is not None and (not isinstance(value, str) or bool(value.strip()))
+
+
+def _validate_reconciliation_contract(reconciliation: dict[str, Any], path: Path) -> None:
+    """Reject a JSON file that lacks the calculation results required by the workbook."""
+    summary = reconciliation.get("summary")
+    metadata = reconciliation.get("metadata")
+    if not isinstance(summary, dict):
+        raise ValueError(f"required reconciliation JSON has no summary object: {path}")
+    if not isinstance(metadata, dict):
+        raise ValueError(f"required reconciliation JSON has no metadata object: {path}")
+
+    missing = [field for field in REQUIRED_RECONCILIATION_METADATA_FIELDS if not _present(metadata.get(field))]
+    missing.extend(
+        label
+        for label, candidates in REQUIRED_RECONCILIATION_SUMMARY_FIELDS.items()
+        if not any(_present(summary.get(candidate)) for candidate in candidates)
+    )
+    if missing:
+        raise ValueError(f"required reconciliation results are missing in {path}: {', '.join(missing)}")
+
+
 def load_analysis_sources(input_dir: Path) -> tuple[dict[str, Any], dict[str, Path], dict[str, Path]]:
     """Load and validate JSON-only inputs, treating voucher metadata as optional."""
     required_paths, optional_paths = _resolve_input_paths(input_dir)
@@ -93,8 +128,9 @@ def load_analysis_sources(input_dir: Path) -> tuple[dict[str, Any], dict[str, Pa
         if not isinstance(payload, dict) or not isinstance(payload.get("records"), list) or not isinstance(payload.get("metadata"), dict):
             raise ValueError(f"required {name} JSON has no records list and metadata object: {required_paths[name]}")
     reconciliation = sources.get("reconciliation")
-    if not isinstance(reconciliation, dict) or not isinstance(reconciliation.get("summary"), dict):
-        raise ValueError(f"required reconciliation JSON has no summary object: {required_paths['reconciliation']}")
+    if not isinstance(reconciliation, dict):
+        raise ValueError(f"required reconciliation JSON is not an object: {required_paths['reconciliation']}")
+    _validate_reconciliation_contract(reconciliation, required_paths["reconciliation"])
     return sources, required_paths, optional_paths
 
 
@@ -369,7 +405,20 @@ def _write_profit_sheet(workbook: Workbook, report_data: dict[str, Any]) -> tupl
     return ws, weekly
 
 
-def _write_inventory_sheet(workbook: Workbook, report_data: dict[str, Any]) -> tuple[Worksheet, tuple[int, int, list[str]]]:
+def _inventory_flow(report_data: dict[str, Any]) -> list[dict[str, Any]]:
+    return weekly_inventory_flow_rows(
+        report_data["records"]["purchase"],
+        report_data["records"]["sales"],
+        report_data["records"]["inventory"],
+        report_data["reconciliation"],
+    )
+
+
+def _write_inventory_sheet(
+    workbook: Workbook,
+    report_data: dict[str, Any],
+    flow: list[dict[str, Any]],
+) -> tuple[Worksheet, tuple[int, int, list[str]]]:
     ws = _new_sheet(workbook, "재고분석")
     inventory_rows = _write_table(
         ws,
@@ -377,12 +426,6 @@ def _write_inventory_sheet(workbook: Workbook, report_data: dict[str, Any]) -> t
         ["product_id", "item_name", "specification", "opening_stock_quantity", "period_purchase_quantity", "period_sales_quantity", "ending_signed_stock_quantity", "ending_fifo_inventory_amount", "inventory_quantity_difference", "cost_status", "quantity_reconciliation_status", "quantity_reconciliation_validation_status", "profit_status"],
         title="품목별 재고 대사 및 FIFO 상태",
         include_empty_columns=True,
-    )
-    flow = weekly_inventory_flow_rows(
-        report_data["records"]["purchase"],
-        report_data["records"]["sales"],
-        report_data["records"]["inventory"],
-        report_data["reconciliation"],
     )
     flow_rows = _write_table(
         ws,
@@ -480,6 +523,99 @@ def _write_execution_sheet(
     return ws
 
 
+def _chart_data_issues(
+    report_data: dict[str, Any],
+    inventory_flow: list[dict[str, Any]],
+    validation_rows: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Return chart identifiers and non-fatal reasons when their source table is unusable."""
+    requirements = [
+        (
+            "purchase_sales",
+            "기간별 매입 원가·매출 공급가액",
+            inventory_flow,
+            ["week_start", "label", "purchase_increase", "outbound_cost_estimate", "sales_amount", "net_change", "estimated_inventory_amount"],
+            "label",
+            ["purchase_increase", "sales_amount"],
+        ),
+        (
+            "weekly_margin",
+            "기간별 매출·매출원가·매출총이익",
+            report_data["analysis"]["weekly_margin"],
+            ["week_start", "label", "row_count", "quantity", "sales_amount", "cost_amount", "margin_amount", "margin_rate", "margin_status", "amount_validation_status"],
+            "label",
+            ["sales_amount", "cost_amount", "margin_amount"],
+        ),
+        (
+            "inventory_value",
+            "기간별 재고금액 추이",
+            inventory_flow,
+            ["week_start", "label", "purchase_increase", "outbound_cost_estimate", "sales_amount", "net_change", "estimated_inventory_amount"],
+            "label",
+            ["estimated_inventory_amount"],
+        ),
+        (
+            "top_companies",
+            "상위 거래처 매출",
+            report_data["analysis"]["top_sales_by_company"],
+            ["name", "row_count", "quantity", "total_amount"],
+            "name",
+            ["total_amount"],
+        ),
+        (
+            "top_items",
+            "상위 품목 매출",
+            report_data["analysis"]["top_sales_by_item"],
+            ["product_id", "item_name", "row_count", "quantity", "total_amount"],
+            "item_name",
+            ["total_amount"],
+        ),
+        (
+            "validation_types",
+            "검증 경고 유형별 건수",
+            _warning_type_rows(validation_rows),
+            ["type", "count"],
+            "type",
+            ["count"],
+        ),
+    ]
+    issues: dict[str, str] = {}
+    for chart_id, title, records, preferred_columns, category, series in requirements:
+        if not records:
+            issues[chart_id] = f"{title}: 차트 데이터 행이 제공되지 않았다."
+            continue
+        columns = _stable_columns(records, preferred_columns)
+        missing = [column for column in [category, *series] if column not in columns]
+        if missing:
+            issues[chart_id] = f"{title}: 차트 필수 열이 없다 ({', '.join(missing)})."
+            continue
+        if not any(_present(record.get(category)) for record in records):
+            issues[chart_id] = f"{title}: 범주 값이 제공되지 않았다."
+            continue
+        empty_series = [
+            column
+            for column in series
+            if not any(isinstance(record.get(column), (int, float, Decimal)) and not isinstance(record.get(column), bool) for record in records)
+        ]
+        if empty_series:
+            issues[chart_id] = f"{title}: 수치 데이터가 없다 ({', '.join(empty_series)})."
+    return issues
+
+
+def _append_chart_warnings(report_data: dict[str, Any], chart_issues: dict[str, str]) -> None:
+    if not chart_issues:
+        return
+    report_data["validation"]["warnings"].extend(
+        {
+            "code": "chart_data_unavailable",
+            "description": description,
+            "chart_id": chart_id,
+        }
+        for chart_id, description in chart_issues.items()
+    )
+    report_data["status"] = "completed_with_warnings"
+
+
 def _column_index(columns: list[str], name: str) -> int | None:
     return columns.index(name) + 1 if name in columns else None
 
@@ -493,6 +629,7 @@ def _add_bar_chart(
     series: list[str],
     title: str,
     anchor: str,
+    value_axis_title: str = "금액",
 ) -> None:
     header_row, end_row, columns = table
     category_col = _column_index(columns, category)
@@ -504,7 +641,7 @@ def _add_bar_chart(
     chart.style = 10
     chart.title = title
     chart.y_axis.title = category
-    chart.x_axis.title = "금액"
+    chart.x_axis.title = value_axis_title
     chart.height = 7
     chart.width = 15
     categories = Reference(source_ws, min_col=category_col, min_row=header_row + 1, max_row=end_row)
@@ -558,13 +695,42 @@ def _add_charts(
     item_table: tuple[int, int, list[str]],
     validation_ws: Worksheet,
     validation_table: tuple[int, int, list[str]],
+    unavailable_chart_ids: set[str],
 ) -> None:
-    _add_bar_chart(summary_ws, inventory_ws, inventory_flow_table, category="label", series=["purchase_increase", "sales_amount"], title="기간별 매입 원가·매출 공급가액", anchor="E2")
-    _add_bar_chart(summary_ws, profit_ws, profit_table, category="label", series=["sales_amount", "cost_amount", "margin_amount"], title="기간별 매출·매출원가·매출총이익", anchor="N2")
-    _add_line_chart(summary_ws, inventory_ws, inventory_flow_table, category="label", series="estimated_inventory_amount", title="기간별 재고금액 추이", anchor="E17")
-    _add_bar_chart(summary_ws, sales_ws, company_table, category="name", series=["total_amount"], title="상위 거래처 매출", anchor="N17")
-    _add_bar_chart(summary_ws, sales_ws, item_table, category="item_name", series=["total_amount"], title="상위 품목 매출", anchor="E32")
-    _add_bar_chart(summary_ws, validation_ws, validation_table, category="type", series=["count"], title="검증 경고 유형별 건수", anchor="N32")
+    if "purchase_sales" not in unavailable_chart_ids:
+        _add_bar_chart(summary_ws, inventory_ws, inventory_flow_table, category="label", series=["purchase_increase", "sales_amount"], title="기간별 매입 원가·매출 공급가액", anchor="E2")
+    if "weekly_margin" not in unavailable_chart_ids:
+        _add_bar_chart(summary_ws, profit_ws, profit_table, category="label", series=["sales_amount", "cost_amount", "margin_amount"], title="기간별 매출·매출원가·매출총이익", anchor="N2")
+    if "inventory_value" not in unavailable_chart_ids:
+        _add_line_chart(summary_ws, inventory_ws, inventory_flow_table, category="label", series="estimated_inventory_amount", title="기간별 재고금액 추이", anchor="E17")
+    if "top_companies" not in unavailable_chart_ids:
+        _add_bar_chart(summary_ws, sales_ws, company_table, category="name", series=["total_amount"], title="상위 거래처 매출", anchor="N17")
+    if "top_items" not in unavailable_chart_ids:
+        _add_bar_chart(summary_ws, sales_ws, item_table, category="item_name", series=["total_amount"], title="상위 품목 매출", anchor="E32")
+    if "validation_types" not in unavailable_chart_ids:
+        _add_bar_chart(summary_ws, validation_ws, validation_table, category="type", series=["count"], title="검증 경고 유형별 건수", anchor="N32", value_axis_title="건수")
+
+
+def _save_workbook_atomically(workbook: Workbook, output_path: Path) -> None:
+    """Write, reopen, and atomically publish the workbook without a partial final file."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=output_path.parent,
+            prefix=f".{output_path.stem}.",
+            suffix=".xlsx",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+        workbook.save(temporary_path)
+        reopened = load_workbook(temporary_path, read_only=True, data_only=False)
+        reopened.close()
+        os.replace(temporary_path, output_path)
+    except Exception:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def export_workbook(
@@ -576,6 +742,10 @@ def export_workbook(
     optional_paths: dict[str, Path] | None = None,
 ) -> None:
     report_data = report_core.build_report_data(sources, spec)
+    inventory_flow = _inventory_flow(report_data)
+    validation_rows = _validation_rows(report_data)
+    chart_issues = _chart_data_issues(report_data, inventory_flow, validation_rows)
+    _append_chart_warnings(report_data, chart_issues)
     validation_rows = _validation_rows(report_data)
     workbook = Workbook()
     summary_ws = _write_summary_sheet(workbook, report_data, validation_rows)
@@ -584,7 +754,7 @@ def export_workbook(
     _write_record_sheet(workbook, "재고", report_data["records"]["inventory"], "inventory")
     _write_metadata_sheet(workbook, report_data)
     profit_ws, profit_table = _write_profit_sheet(workbook, report_data)
-    inventory_ws, inventory_flow_table = _write_inventory_sheet(workbook, report_data)
+    inventory_ws, inventory_flow_table = _write_inventory_sheet(workbook, report_data, inventory_flow)
     sales_ws, company_table, item_table = _write_sales_sheet(workbook, report_data)
     validation_ws, validation_table = _write_validation_sheet(workbook, validation_rows)
     _write_execution_sheet(workbook, report_data, required_paths or {}, optional_paths or {})
@@ -599,11 +769,11 @@ def export_workbook(
         item_table,
         validation_ws,
         validation_table,
+        set(chart_issues),
     )
     if workbook.sheetnames != SHEET_NAMES:
         raise RuntimeError(f"unexpected worksheet order: {workbook.sheetnames}")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    workbook.save(output_path)
+    _save_workbook_atomically(workbook, output_path)
 
 
 def generate_report(input_dir: Path, output_path: Path, spec_path: Path = DEFAULT_SPEC) -> None:
