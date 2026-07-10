@@ -7,19 +7,19 @@
     "unique_product_ids": 7,
     "date_min": "2026-05-05",
     "date_max": "2026-05-24",
-    "detail_totals": {"quantity": 47, "supply_amount": 11260, "vat": 0, "total_amount": 11260}
+    "detail_totals": {"quantity": 47, "supply_amount": 11260, "vat": 160, "total_amount": 11430}
   },
   "records": [
     {"excel_row": 2, "transaction_type": "sales", "company": "Demo Buyer A", "date": "2026-05-05", "voucher": 1, "item_name": "FIFO Widget", "specification": "A", "product_id": 1001, "quantity": 4, "unit_price": 250, "supply_amount": 1000, "vat": 0, "total_amount": 1000},
-    {"excel_row": 3, "transaction_type": "sales", "company": "Demo Buyer A", "date": "2026-05-10", "voucher": 2, "item_name": "FIFO Widget", "specification": "A", "product_id": 1001, "quantity": 8, "unit_price": 250, "supply_amount": 2000, "vat": 0, "total_amount": 2000},
+    {"excel_row": 3, "transaction_type": "sales", "company": "Demo Buyer A", "date": "2026-05-10", "voucher": 2, "item_name": "FIFO Widget", "specification": "A", "product_id": 1001, "quantity": 8, "unit_price": 250, "supply_amount": 2000, "vat": 200, "total_amount": 2200},
     {"excel_row": 4, "transaction_type": "sales", "company": "Demo Buyer B", "date": "2026-05-20", "voucher": 3, "item_name": "FIFO Widget", "specification": "A", "product_id": 1001, "quantity": 6, "unit_price": 250, "supply_amount": 1500, "vat": 0, "total_amount": 1500},
     {"excel_row": 5, "transaction_type": "sales", "company": "Demo Buyer C", "date": "2026-05-12", "voucher": 4, "item_name": "Backfill Part", "specification": "B", "product_id": 1002, "quantity": 10, "unit_price": 300, "supply_amount": 3000, "vat": 0, "total_amount": 3000},
     {"excel_row": 6, "transaction_type": "sales", "company": "Demo Buyer C", "date": "2026-05-10", "voucher": 5, "item_name": "Same Day Part renamed", "specification": "C2", "product_id": 1003, "quantity": 3, "unit_price": 500, "supply_amount": 1500, "vat": 0, "total_amount": 1500},
     {"excel_row": 7, "transaction_type": "sales", "company": "Demo Buyer D", "date": "2026-05-13", "voucher": 6, "item_name": "Cancel Part", "specification": "D", "product_id": 1005, "quantity": 4, "unit_price": 150, "supply_amount": 600, "vat": 0, "total_amount": 600},
     {"excel_row": 8, "transaction_type": "sales", "company": "Demo Buyer E", "date": "2026-05-11", "voucher": 7, "item_name": "Return Part", "specification": "E", "product_id": 1006, "quantity": 4, "unit_price": 180, "supply_amount": 720, "vat": 0, "total_amount": 720},
     {"excel_row": 9, "transaction_type": "sales", "company": "Demo Buyer E", "date": "2026-05-12", "voucher": 8, "item_name": "Return Part", "specification": "E", "product_id": 1006, "quantity": 3, "unit_price": 180, "supply_amount": 540, "vat": 0, "total_amount": 540},
-    {"excel_row": 10, "transaction_type": "sales", "company": "Demo Buyer E", "date": "2026-05-15", "voucher": 9, "item_name": "Return Part", "specification": "E", "product_id": 1006, "quantity": -5, "unit_price": 180, "supply_amount": -900, "vat": 0, "total_amount": -900},
-    {"excel_row": 11, "transaction_type": "sales", "company": "Demo Buyer F", "date": "2026-05-14", "voucher": 10, "item_name": "Unconfirmed Part", "specification": "G", "product_id": 1007, "quantity": 5, "unit_price": 100, "supply_amount": 500, "vat": 0, "total_amount": 500},
+    {"excel_row": 10, "transaction_type": "sales", "company": "Demo Buyer E", "date": "2026-05-15", "voucher": 9, "item_name": "Return Part", "specification": "E", "product_id": 1006, "quantity": -5, "unit_price": 180, "supply_amount": -900, "vat": -90, "total_amount": -990},
+    {"excel_row": 11, "transaction_type": "sales", "company": "Demo Buyer F", "date": "2026-05-14", "voucher": 10, "item_name": "Unconfirmed Part", "specification": "G", "product_id": 1007, "quantity": 5, "unit_price": 100, "supply_amount": 500, "vat": 50, "total_amount": 560},
     {"excel_row": 12, "transaction_type": "sales", "company": "Demo Buyer C", "date": "2026-05-24", "voucher": 11, "item_name": "Backfill Part", "specification": "B", "product_id": 1002, "quantity": 2, "unit_price": 300, "supply_amount": 600, "vat": 0, "total_amount": 600},
     {"excel_row": 13, "transaction_type": "sales", "company": "Demo Buyer G", "date": "2026-05-24", "voucher": 12, "item_name": "After End Part", "specification": "F", "product_id": 1004, "quantity": 2, "unit_price": 100, "supply_amount": 200, "vat": 0, "total_amount": 200},
     {"excel_row": 14, "transaction_type": "sales", "company": "Demo Buyer Z", "date": "2026-05-18", "voucher": 13, "item_name": "Missing ID", "specification": "Z", "product_id": null, "quantity": 1, "unit_price": 0, "supply_amount": 0, "vat": 0, "total_amount": 0}

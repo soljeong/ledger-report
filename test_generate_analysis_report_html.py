@@ -116,6 +116,19 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
             html = output_path.read_text(encoding="utf-8")
             self.assertIn("FIFO 재고금액", html)
 
+    def test_report_separates_vat_and_marks_invalid_amounts_as_non_final(self):
+        html = render_report_html(load_sources(EXAMPLE_DIR))
+        for text in (
+            "부가세 정산",
+            "매출 공급가액",
+            "매입 부가세",
+            "부가세 납부 예상액",
+            "현금 관점의 참고값",
+            "validation_error",
+            "잠정 매출총이익",
+        ):
+            self.assertIn(text, html)
+
 
 if __name__ == "__main__":
     unittest.main()

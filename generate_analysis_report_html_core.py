@@ -103,12 +103,13 @@ def summary_row(title: str, value: str, note: str = "") -> str:
 
 
 def top_sales_by_company(records: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
+    """Rank revenue using supply amounts; total_amount is VAT-inclusive cash."""
     grouped: dict[str, dict[str, Any]] = defaultdict(lambda: {"row_count": 0, "quantity": 0, "total_amount": 0})
     for row in records:
         company = row.get("company") or "(거래처 없음)"
         grouped[company]["row_count"] += 1
         grouped[company]["quantity"] += row.get("quantity") or 0
-        grouped[company]["total_amount"] += row.get("total_amount") or 0
+        grouped[company]["total_amount"] += row.get("supply_amount", row.get("total_amount", 0)) or 0
 
     rows = [
         {
@@ -132,7 +133,7 @@ def top_sales_by_item(records: list[dict[str, Any]], limit: int = 10) -> list[di
         grouped[key]["item_name"] = row.get("item_name")
         grouped[key]["row_count"] += 1
         grouped[key]["quantity"] += row.get("quantity") or 0
-        grouped[key]["total_amount"] += row.get("total_amount") or 0
+        grouped[key]["total_amount"] += row.get("supply_amount", row.get("total_amount", 0)) or 0
 
     rows = list(grouped.values())
     return sorted(rows, key=lambda row: row["total_amount"], reverse=True)[:limit]
@@ -153,6 +154,7 @@ def weekly_purchase_sales_amounts(
     cost_by_day: dict[date, int | float] = defaultdict(int)
     quantity_by_day: dict[date, int | float] = defaultdict(int)
     row_count_by_day: dict[date, int] = defaultdict(int)
+    unconfirmed_by_day: dict[date, float] = defaultdict(float)
     date_values: list[date] = []
     metadata = (reconciliation or {}).get("metadata", {})
     period_start, period_end = metadata.get("period_start"), metadata.get("period_end")
@@ -163,6 +165,9 @@ def weekly_purchase_sales_amounts(
         for row in (reconciliation or {}).get("sales_cost_events", [])
         if in_period(row)
     }
+    for row in (reconciliation or {}).get("sales_cost_events", []):
+        if in_period(row) and row.get("event_type") in {"sale", "sale_cancellation"}:
+            unconfirmed_by_day[date.fromisoformat(row["date"])] += float(row.get("unconfirmed_quantity") or 0)
 
     for row in purchase_records:
         if in_period(row):
@@ -171,7 +176,7 @@ def weekly_purchase_sales_amounts(
         if not in_period(row):
             continue
         row_date = date.fromisoformat(row["date"])
-        sales_by_day[row_date] += row.get("total_amount") or 0
+        sales_by_day[row_date] += row.get("supply_amount", row.get("total_amount", 0)) or 0
         sale_id = f"{row.get('date')}|{row.get('voucher')}|{row.get('excel_row')}"
         cost_by_day[row_date] += fifo_cost_by_sale.get(sale_id, 0)
         quantity_by_day[row_date] += row.get("quantity") or 0
@@ -182,7 +187,7 @@ def weekly_purchase_sales_amounts(
         return []
 
     grouped: dict[date, dict[str, Any]] = defaultdict(
-        lambda: {"row_count": 0, "quantity": 0, "sales_amount": 0, "cost_amount": 0}
+        lambda: {"row_count": 0, "quantity": 0, "sales_amount": 0, "cost_amount": 0, "unconfirmed_quantity": 0}
     )
     current = min(date_values)
     end_date = max(date_values)
@@ -191,6 +196,7 @@ def weekly_purchase_sales_amounts(
         grouped[week_start(current.isoformat())]["quantity"] += quantity_by_day.get(current, 0)
         grouped[week_start(current.isoformat())]["sales_amount"] += sales_by_day.get(current, 0)
         grouped[week_start(current.isoformat())]["cost_amount"] += cost_by_day.get(current, 0)
+        grouped[week_start(current.isoformat())]["unconfirmed_quantity"] += unconfirmed_by_day.get(current, 0)
         current += timedelta(days=1)
 
     result: list[dict[str, Any]] = []
@@ -207,7 +213,8 @@ def weekly_purchase_sales_amounts(
                 "sales_amount": sales_amount,
                 "cost_amount": cost_amount,
                 "margin_amount": margin_amount,
-                "margin_rate": (margin_amount / sales_amount * 100) if sales_amount else None,
+                "margin_rate": (margin_amount / sales_amount * 100) if sales_amount and not grouped[start]["unconfirmed_quantity"] else None,
+                "unconfirmed_quantity": grouped[start]["unconfirmed_quantity"],
             }
         )
     return result
@@ -464,13 +471,13 @@ def principal_sales_cost_rows(
         group["principal"] = principal
         group["row_count"] += 1
         group["quantity"] += row.get("quantity") or 0
-        group["sales_amount"] += row.get("total_amount") or 0
+        group["sales_amount"] += row.get("supply_amount", row.get("total_amount", 0)) or 0
         sale = fifo_by_sale.get(sale_key(row))
         if sale is None:
             group["missing_cost_row_count"] += 1
             continue
         group["cost_amount"] += sale.get("cost_amount") or 0
-        if sale.get("event_type") == "sale" and sale.get("unconfirmed_quantity"):
+        if sale.get("event_type") in {"sale", "sale_cancellation"} and sale.get("unconfirmed_quantity"):
             group["unconfirmed_quantity"] += sale["unconfirmed_quantity"]
             group["unconfirmed_row_count"] += 1
 
@@ -487,7 +494,7 @@ def principal_sales_cost_rows(
                 "sales_amount": sales_amount,
                 "cost_amount": cost_amount,
                 "margin_amount": margin_amount,
-                "margin_rate": (margin_amount / sales_amount * 100) if sales_amount else None,
+                "margin_rate": (margin_amount / sales_amount * 100) if sales_amount and not values["unconfirmed_quantity"] else None,
                 "missing_cost_row_count": values["missing_cost_row_count"],
                 "unconfirmed_quantity": values["unconfirmed_quantity"],
                 "unconfirmed_row_count": values["unconfirmed_row_count"],

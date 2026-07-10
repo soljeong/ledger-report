@@ -8,7 +8,7 @@ from analyze_inventory import build_reconciliation
 def purchase(date: str, quantity: int, unit_price: int, *, product_id=1, voucher=1, excel_row=1, name="Item", spec="A") -> dict:
     return {
         "date": date, "quantity": quantity, "unit_price": unit_price,
-        "total_amount": quantity * unit_price, "supply_amount": quantity * unit_price,
+        "total_amount": quantity * unit_price, "supply_amount": quantity * unit_price, "vat": 0,
         "product_id": product_id, "voucher": voucher, "excel_row": excel_row,
         "item_name": name, "specification": spec,
     }
@@ -17,7 +17,7 @@ def purchase(date: str, quantity: int, unit_price: int, *, product_id=1, voucher
 def sale(date: str, quantity: int, *, product_id=1, voucher=1, excel_row=1, amount=0, name="Item", spec="A") -> dict:
     return {
         "date": date, "quantity": quantity, "unit_price": 999999,
-        "total_amount": amount, "supply_amount": amount,
+        "total_amount": amount, "supply_amount": amount, "vat": 0,
         "product_id": product_id, "voucher": voucher, "excel_row": excel_row,
         "item_name": name, "specification": spec,
     }
@@ -241,6 +241,60 @@ class InventoryAnalysisTests(unittest.TestCase):
     def test_date_relationship_is_validated(self):
         with self.assertRaises(ValueError):
             analyze([purchase("2026-01-01", 1, 100)], [], [inventory(1)], start="2026-02-01", end="2026-01-01", stock_date="2026-01-01")
+
+    def test_profit_uses_supply_amount_and_vat_is_separate(self):
+        buy = purchase("2026-01-01", 1, 100)
+        buy.update(supply_amount=100, vat=10, total_amount=110)
+        sell = sale("2026-01-02", 1, amount=220)
+        sell.update(supply_amount=200, vat=20, total_amount=220)
+        summary = analyze([buy], [sell], [inventory(0)]) ["summary"]
+        self.assertEqual(summary["gross_profit"], 100)
+        self.assertEqual(summary["gross_profit_rate"], 50)
+        self.assertEqual(summary["vat_settlement_amount"], 10)
+        self.assertEqual(summary["vat_settlement_status"], "payable")
+        self.assertEqual(summary["post_vat_reference_amount"], 90)
+
+    def test_vat_refund_and_component_mismatch_are_exposed(self):
+        buy = purchase("2026-01-01", 1, 100)
+        buy.update(supply_amount=100, vat=20, total_amount=120)
+        sell = sale("2026-01-02", 1, amount=110)
+        sell.update(supply_amount=100, vat=10, total_amount=111)
+        result = analyze([buy], [sell], [inventory(0)])
+        self.assertEqual(result["summary"]["vat_settlement_amount"], -10)
+        self.assertEqual(result["summary"]["vat_settlement_status"], "validation_error")
+        self.assertEqual(result["summary"]["amount_validation_error_count"], 1)
+        self.assertEqual(result["amount_validation_errors"][0]["code"], "amount_components_mismatch")
+
+    def test_period_shortage_backfill_changes_inventory_flow_on_purchase_date(self):
+        result = analyze(
+            [purchase("2026-01-02", 10, 100)], [sale("2026-01-01", 10, amount=2000)], [inventory(0)],
+            start="2026-01-01", end="2026-01-02", stock_date="2026-01-02",
+        )
+        events = result["inventory_cost_events"]
+        self.assertEqual([(event["event_type"], event["cost_amount"]) for event in events], [("purchase", 1000), ("shortage_backfill_consumption", -1000)])
+        self.assertEqual(result["summary"]["ending_fifo_inventory_amount"], 0)
+
+    def test_prior_period_shortage_settlement_is_not_current_period_cogs(self):
+        result = analyze(
+            [purchase("2026-01-02", 10, 100)], [sale("2025-12-31", 10, amount=2000)], [inventory(0)],
+            start="2026-01-01", end="2026-01-31", stock_date="2026-01-31",
+        )
+        summary = result["summary"]
+        self.assertEqual(summary["fifo_sales_cost_amount"], 0)
+        self.assertEqual(summary["prior_period_shortage_settlement_quantity"], 10)
+        self.assertEqual(summary["prior_period_shortage_settlement_amount"], 1000)
+        self.assertEqual(summary["ending_fifo_inventory_amount"], 0)
+        self.assertEqual(
+            summary["period_sales_supply_amount"] + summary["ending_fifo_inventory_amount"] + summary["prior_period_shortage_settlement_amount"],
+            summary["opening_stock_amount"] + summary["period_purchase_cost_amount"] + summary["post_period_backfill_amount"] + summary["gross_profit"],
+        )
+
+    def test_unconfirmed_sale_cancellation_is_net_and_profit_is_provisional(self):
+        result = analyze(
+            [], [sale("2026-01-01", 10, amount=1000), sale("2026-01-02", -4, voucher=2, excel_row=2, amount=-400)], [inventory(-6)],
+        )
+        self.assertEqual(result["summary"]["unconfirmed_quantity"], 6)
+        self.assertEqual(result["summary"]["gross_profit_status"], "provisional")
 
 
 if __name__ == "__main__":
