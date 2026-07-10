@@ -36,7 +36,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertIn("양쪽 합계 1,303,500원", html)
         self.assertIn("매출 + 재고", html)
         self.assertIn("대사 잔여 + 매입", html)
-        self.assertIn("추정 매출총이익 = 총 매출금액 - 추정 매출원가", html)
+        self.assertIn("추정 매출원가 = 매출수량 × 현재 평균원가", html)
         self.assertIn("대사 잔여금액 = 총 매출금액 + 현재 재고금액 - 총 매입금액", html)
         self.assertIn("주간 매출", html)
         self.assertIn("주간 재고금액 흐름: 매입은 위, 출고는 아래", html)
@@ -69,7 +69,6 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertIn("676,500", html)
         self.assertIn("368,500", amount_table_html)
         self.assertIn("258,500", html)
-        self.assertIn("41.2%", amount_table_html)
         self.assertNotIn("최종매입가", html)
 
         self.assertIn("4/27", html)
@@ -91,8 +90,6 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
             "총 매출금액",
             "추정 매출원가",
             "현재 재고금액",
-            "추정 매출총이익",
-            "추정 매출총이익률",
             "대사 잔여금액",
         ]
         self.assertEqual(
