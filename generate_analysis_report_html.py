@@ -22,6 +22,67 @@ def _numeric_frame(records: list[dict[str, Any]], columns: tuple[str, ...]) -> p
     return frame
 
 
+def _unique_value_count(records: list[dict[str, Any]], key: str) -> int:
+    return len(
+        {
+            str(value).strip()
+            for row in records
+            if (value := row.get(key)) not in (None, "") and str(value).strip()
+        }
+    )
+
+
+def _replace_once(text: str, old: str, new: str, label: str) -> str:
+    if old not in text:
+        raise RuntimeError(f"{label} replacement marker not found")
+    return text.replace(old, new, 1)
+
+
+def _replace_between(
+    text: str,
+    start_marker: str,
+    end_marker: str,
+    replacement: str,
+    *,
+    start_at: int = 0,
+    label: str,
+) -> str:
+    start = text.find(start_marker, start_at)
+    if start < 0:
+        raise RuntimeError(f"{label} start marker not found")
+    content_start = start + len(start_marker)
+    end = text.find(end_marker, content_start)
+    if end < 0:
+        raise RuntimeError(f"{label} end marker not found")
+    return text[:content_start] + replacement + text[end:]
+
+
+def render_amount_balance_chart(
+    purchase_amount: int | float,
+    sales_amount: int | float,
+    inventory_amount: int | float,
+    remainder_amount: int | float,
+) -> str:
+    """Render the balance chart while naming the residual as a reconciliation amount."""
+    chart = _base.render_amount_balance_chart(
+        purchase_amount,
+        sales_amount,
+        inventory_amount,
+        remainder_amount,
+    )
+    replacements = (
+        ("매입·매출·재고·이익", "매입·매출·재고·대사 잔여금액"),
+        ("매출과 재고의 합계, 이익과 매입의 합계", "매출과 재고의 합계, 대사 잔여금액과 매입의 합계"),
+        ("오른쪽은 이익금액 위에 매입금액을", "오른쪽은 대사 잔여금액 위에 매입금액을"),
+        (">이익</text>", ">대사 잔여</text>"),
+        (">이익 + 매입</text>", ">대사 잔여 + 매입</text>"),
+        (">남는 금액과 투입액</text>", ">대사 차이와 투입액</text>"),
+    )
+    for old, new in replacements:
+        chart = chart.replace(old, new)
+    return chart
+
+
 def weekly_inventory_flow_rows(
     purchase_records: list[dict[str, Any]],
     sales_records: list[dict[str, Any]],
@@ -129,11 +190,116 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     base_spec.setdefault("plotly", {})["include_plotlyjs"] = False
     html = _base.render_report_html(sources, base_spec)
 
+    purchase_meta = sources["purchase"]["metadata"]
+    sales_meta = sources["sales"]["metadata"]
+    inventory_meta = sources["inventory"]["metadata"]
+    purchase_records = sources["purchase"]["records"]
+    sales_records = sources["sales"]["records"]
+    inventory_records = sources["inventory"]["records"]
+    reconciliation = sources["reconciliation"]["summary"]
+
+    summary_rows_html = "\n".join(
+        [
+            _base.summary_row("분석 기간", _base.period_label(purchase_meta, sales_meta)),
+            _base.summary_row(
+                "거래 규모",
+                f"매입 상세 {_base.number(purchase_meta['record_count'])}건 / 매출 상세 {_base.number(sales_meta['record_count'])}건",
+            ),
+            _base.summary_row(
+                "분석 대상",
+                f"매입처 {_base.number(_unique_value_count(purchase_records, 'company'))}곳 / "
+                f"매출처 {_base.number(_unique_value_count(sales_records, 'company'))}곳",
+                f"재고 품목 {_base.number(inventory_meta['unique_product_ids'])}개",
+            ),
+        ]
+    )
+    html = _replace_between(
+        html,
+        '        <dl class="summary-list">\n',
+        "        </dl>",
+        f"          {summary_rows_html}\n",
+        label="summary list",
+    )
+
+    purchase_amount = reconciliation["purchase_amount"]
+    sales_amount = reconciliation["sales_amount"]
+    inventory_amount = reconciliation["inventory_amount_at_average_cost"]
+    reconciliation_remainder = reconciliation["remainder_at_average_cost"]
+    weekly_sales_rows = _base.weekly_purchase_sales_amounts(
+        purchase_records,
+        sales_records,
+        inventory_records,
+    )
+    estimated_sales_cost = sum(row["cost_amount"] for row in weekly_sales_rows)
+    estimated_gross_profit = sales_amount - estimated_sales_cost
+    estimated_gross_margin_rate = (estimated_gross_profit / sales_amount * 100) if sales_amount else None
+
+    original_balance_chart = _base.render_amount_balance_chart(
+        purchase_amount,
+        sales_amount,
+        inventory_amount,
+        reconciliation_remainder,
+    )
+    amount_balance_chart = render_amount_balance_chart(
+        purchase_amount,
+        sales_amount,
+        inventory_amount,
+        reconciliation_remainder,
+    )
+    html = _replace_once(html, original_balance_chart, amount_balance_chart, "amount balance chart")
+
+    amount_rows = [
+        ("총 매입금액", "기간 내 매입 상세 합계", _base.money(purchase_amount)),
+        ("총 매출금액", "기간 내 매출 상세 합계", _base.money(sales_amount)),
+        ("추정 매출원가", "매출수량 × 현재 평균원가", _base.money(estimated_sales_cost)),
+        ("현재 재고금액", "현재 재고수량 × 평균원가", _base.money(inventory_amount)),
+        ("추정 매출총이익", "총 매출금액 - 추정 매출원가", _base.money(estimated_gross_profit)),
+        ("추정 매출총이익률", "추정 매출총이익 ÷ 총 매출금액", _base.percent(estimated_gross_margin_rate)),
+        (
+            "대사 잔여금액",
+            "총 매출금액 + 현재 재고금액 - 총 매입금액",
+            _base.money(reconciliation_remainder),
+        ),
+    ]
+    amount_table = "\n".join(
+        f"""
+          <tr>
+            <th>{escape(label)}</th>
+            <td>{escape(description)}</td>
+            <td class="money">{escape(value)}</td>
+          </tr>
+        """
+        for label, description, value in amount_rows
+    )
+    amount_table_start = html.index('<table class="amount-table">')
+    html = _replace_between(
+        html,
+        "          <tbody>\n",
+        "          </tbody>",
+        f"            {amount_table}\n",
+        start_at=amount_table_start,
+        label="amount table body",
+    )
+    html = _replace_once(
+        html,
+        '<th class="money">금액</th>',
+        '<th class="money">값</th>',
+        "amount table value heading",
+    )
+    html = _replace_once(
+        html,
+        '<p class="formula">이익 = 매출금액 + 재고금액 - 매입금액. 재고금액은 평균원가 기준이다.</p>',
+        '<p class="formula">추정 매출총이익 = 총 매출금액 - 추정 매출원가. '
+        '대사 잔여금액 = 총 매출금액 + 현재 재고금액 - 총 매입금액.</p>\n'
+        '        <p class="section-note">추정 매출원가는 매출수량 × 현재 평균원가 기준이며 확정 회계 원가와 다를 수 있다.</p>',
+        "amount reconciliation formula",
+    )
+
     chart_spec = spec["charts"]["weekly_inventory_flow"]
     rows = weekly_inventory_flow_rows(
-        sources["purchase"]["records"],
-        sources["sales"]["records"],
-        sources["inventory"]["records"],
+        purchase_records,
+        sales_records,
+        inventory_records,
     )
     include_plotlyjs = _base.include_plotlyjs_option(spec.get("plotly", {}).get("include_plotlyjs", "inline"))
     chart = _base.figure_html(
