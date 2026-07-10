@@ -29,8 +29,8 @@ class ExportSalesVoucherExcelTests(unittest.TestCase):
             grouped = workbook["매출_전표별"]
             meta = workbook["전표_메타입력"]
 
-            self.assertEqual(grouped.max_row, 1 + 3 + 4)
-            self.assertEqual(meta.max_row, 1 + 3)
+            self.assertEqual(grouped.max_row, 1 + 13 + 13)
+            self.assertEqual(meta.max_row, 1 + 13)
 
             self.assertEqual(grouped["A1"].value, "행유형")
             self.assertEqual(grouped["B1"].value, "전표키")
@@ -39,29 +39,29 @@ class ExportSalesVoucherExcelTests(unittest.TestCase):
             self.assertEqual(grouped["R1"].value, "메모")
 
             self.assertEqual(grouped["A2"].value, "전표")
-            self.assertEqual(grouped["B2"].value, "2026-05-08-1")
-            self.assertEqual(grouped["C2"].value, "2026-05-08")
+            self.assertEqual(grouped["B2"].value, "2026-05-05-1")
+            self.assertEqual(grouped["C2"].value, "2026-05-05")
             self.assertEqual(grouped["D2"].value, 1)
-            self.assertEqual(grouped["E2"].value, "Sample Robotics")
-            self.assertEqual(grouped["F2"].value, 2)
-            self.assertEqual(grouped["G2"].value, 60)
-            self.assertEqual(grouped["K2"].value, 462000)
+            self.assertEqual(grouped["E2"].value, "Demo Buyer A")
+            self.assertEqual(grouped["F2"].value, 1)
+            self.assertEqual(grouped["G2"].value, 4)
+            self.assertEqual(grouped["K2"].value, 1000)
 
             self.assertEqual(grouped["A3"].value, "상세")
-            self.assertEqual(grouped["B3"].value, "2026-05-08-1")
-            self.assertEqual(grouped["H3"].value, 8000)
+            self.assertEqual(grouped["B3"].value, "2026-05-05-1")
+            self.assertEqual(grouped["H3"].value, 250)
             self.assertEqual(grouped["L3"].value, 1001)
             self.assertEqual(grouped.row_dimensions[3].outlineLevel, 1)
             self.assertTrue(grouped.row_dimensions[3].hidden)
 
             self.assertEqual(meta["A1"].value, "전표키")
-            self.assertEqual(meta["A2"].value, "2026-05-08-1")
-            self.assertEqual(meta["B2"].value, "2026-05-08")
+            self.assertEqual(meta["A2"].value, "2026-05-05-1")
+            self.assertEqual(meta["B2"].value, "2026-05-05")
             self.assertEqual(meta["C2"].value, 1)
-            self.assertEqual(meta["D2"].value, "Sample Robotics")
-            self.assertEqual(meta["E2"].value, 2)
-            self.assertEqual(meta["F2"].value, 60)
-            self.assertEqual(meta["I2"].value, 462000)
+            self.assertEqual(meta["D2"].value, "Demo Buyer A")
+            self.assertEqual(meta["E2"].value, 1)
+            self.assertEqual(meta["F2"].value, 4)
+            self.assertEqual(meta["I2"].value, 1000)
 
     def test_rejects_non_sales_payload(self) -> None:
         payload = {"metadata": {"transaction_type": "purchase"}, "records": []}

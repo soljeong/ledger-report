@@ -2,7 +2,7 @@
 
 ![Report preview](docs/assets/report-preview.png)
 
-Excel 매입/매출/재고 장부를 JSON으로 정규화하고, 제품 ID 기준 대사와 Plotly HTML 보고서를 만드는 작은 분석 도구입니다. 공개 레포에는 샘플 JSON과 미리보기 PNG만 포함하고, 실제 원본/중간산출물/리포트는 Git에서 제외합니다.
+Excel 매입/매출/재고 장부를 JSON으로 정규화하고, `product_id`별 FIFO 재고원가·매출원가와 날짜 기준 재고수량 대사를 계산하는 분석 도구입니다. 공개 레포에는 샘플 JSON과 미리보기 PNG만 포함하고, 실제 원본/중간산출물/리포트는 Git에서 제외합니다.
 
 ## Layout
 
@@ -22,6 +22,18 @@ python -m venv .venv
 
 ## Demo Report
 
+데모 분석기간은 `2026-05-10`~`2026-05-20`, 재고 기준일은 `2026-05-25`입니다. 데모에는 복수 매입단가, 기초재고, 후속 매입 소급배정, 미확정 출고, 음수 매입·매출 및 기준일 후 수량대사가 포함되어 있습니다.
+
+```bash
+.venv/bin/python analyze_inventory.py \
+  --base-dir examples/dummy_json \
+  --period-start 2026-05-10 \
+  --period-end 2026-05-20 \
+  --inventory-date 2026-05-25 \
+  --json-out examples/dummy_json/inventory_reconciliation.json \
+  --md-out /tmp/inventory_reconciliation.md
+```
+
 ```bash
 .venv/bin/python generate_analysis_report_html.py \
   --input-dir examples/dummy_json \
@@ -39,7 +51,7 @@ python -m venv .venv
 ```bash
 .venv/bin/python parse_workbooks.py
 .venv/bin/python analyze_validation.py
-.venv/bin/python analyze_inventory.py
+.venv/bin/python analyze_inventory.py --period-start YYYY-MM-DD --period-end YYYY-MM-DD --inventory-date YYYY-MM-DD
 .venv/bin/python export_purchase_voucher_excel.py
 .venv/bin/python export_sales_voucher_excel.py
 .venv/bin/python parse_sales_voucher_metadata.py
