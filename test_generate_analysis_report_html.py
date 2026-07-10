@@ -19,7 +19,7 @@ EXAMPLE_DIR = BASE_DIR / "examples" / "dummy_json"
 
 
 class GenerateAnalysisReportHtmlTests(unittest.TestCase):
-    def test_renders_summary_average_cost_reconciliation_and_sales_tops(self) -> None:
+    def test_renders_analysis_overview_and_key_amount_reconciliation(self) -> None:
         sources = load_sources(EXAMPLE_DIR)
         html = render_report_html(sources)
         principal_section = html.split('id="principal-title"', 1)[1]
@@ -35,8 +35,9 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertIn("밸런스 블록 차트", html)
         self.assertIn("양쪽 합계 1,303,500원", html)
         self.assertIn("매출 + 재고", html)
-        self.assertIn("이익 + 매입", html)
-        self.assertIn("이익 = 매출금액 + 재고금액 - 매입금액", html)
+        self.assertIn("대사 잔여 + 매입", html)
+        self.assertIn("추정 매출총이익 = 총 매출금액 - 추정 매출원가", html)
+        self.assertIn("대사 잔여금액 = 총 매출금액 + 현재 재고금액 - 총 매입금액", html)
         self.assertIn("주간 매출", html)
         self.assertIn("주간 재고금액 흐름: 매입은 위, 출고는 아래", html)
         self.assertIn("원청별 매출", html)
@@ -50,8 +51,11 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertNotIn("총 139개 매입 전표", html)
         self.assertNotIn("매출 거래처별 TOP", html)
         self.assertIn("2026-05-01 ~ 2026-06-19", html)
+        self.assertIn("거래 규모", html)
         self.assertIn("매입 상세 4건", html)
         self.assertIn("매출 상세 4건", html)
+        self.assertIn("분석 대상", html)
+        self.assertIn("매입처 2곳 / 매출처 2곳", html)
         self.assertIn("재고 품목 4개", html)
         self.assertIn('class="summary-list"', html)
         self.assertNotIn('class="cards"', html)
@@ -63,7 +67,9 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertIn("1,045,000", html)
         self.assertIn("627,000", html)
         self.assertIn("676,500", html)
+        self.assertIn("368,500", amount_table_html)
         self.assertIn("258,500", html)
+        self.assertIn("41.2%", amount_table_html)
         self.assertNotIn("최종매입가", html)
 
         self.assertIn("4/27", html)
@@ -79,8 +85,21 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertNotIn("원가 미확인 행수", html)
         self.assertNotIn("매출 품목별 TOP", html)
         self.assertIn("제품별 단가", html)
-        self.assertNotIn("<th class=\"money\">수량</th>", principal_section)
-        self.assertLess(amount_table_html.index("매입금액"), amount_table_html.index("이익"))
+        self.assertNotIn('<th class="money">수량</th>', principal_section)
+        amount_labels = [
+            "총 매입금액",
+            "총 매출금액",
+            "추정 매출원가",
+            "현재 재고금액",
+            "추정 매출총이익",
+            "추정 매출총이익률",
+            "대사 잔여금액",
+        ]
+        self.assertEqual(
+            [amount_table_html.index(label) for label in amount_labels],
+            sorted(amount_table_html.index(label) for label in amount_labels),
+        )
+        self.assertNotIn("<th>이익</th>", amount_table_html)
 
         self.assertNotIn("품목별 분석", html)
         self.assertNotIn("전표별 매출 요약", html)
@@ -90,6 +109,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
 
         self.assertNotIn('id="amount-balance-chart"', html)
         self.assertIn("모두 0 이상", html)
+        self.assertIn("대사 잔여금액", html)
 
     def test_report_spec_controls_chart_text_and_plotlyjs_mode(self) -> None:
         spec = load_report_spec(BASE_DIR / "report_spec.yaml")
