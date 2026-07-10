@@ -113,6 +113,18 @@ def decimal_amount(value: Any) -> Decimal | None:
         return None
 
 
+def safe_iso_date(value: Any) -> date | None:
+    """Parse a record date without letting malformed source rows break HTML."""
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
 def event_cost_amount(row: dict[str, Any]) -> Decimal:
     return decimal_amount(row.get("cost_amount_exact")) or decimal_amount(row.get("cost_amount")) or Decimal("0")
 
@@ -167,7 +179,9 @@ def top_sales_by_item(records: list[dict[str, Any]], limit: int = 10) -> list[di
 
 
 def week_start(value: str) -> date:
-    parsed = date.fromisoformat(value)
+    parsed = safe_iso_date(value)
+    if parsed is None:
+        raise ValueError(f"date must be ISO YYYY-MM-DD: {value!r}")
     return parsed - timedelta(days=parsed.weekday())
 
 
@@ -181,20 +195,22 @@ def weekly_purchase_sales_amounts(
     cost_by_day: dict[date, Decimal] = defaultdict(lambda: Decimal("0"))
     quantity_by_day: dict[date, int | float] = defaultdict(int)
     row_count_by_day: dict[date, int] = defaultdict(int)
-    unconfirmed_by_day: dict[date, float] = defaultdict(float)
+    unconfirmed_delta_by_day: dict[date, Decimal] = defaultdict(lambda: Decimal("0"))
     date_values: list[date] = []
     metadata = (reconciliation or {}).get("metadata", {})
     period_start, period_end = metadata.get("period_start"), metadata.get("period_end")
     def in_period(row: dict[str, Any]) -> bool:
-        return not period_start or not period_end or period_start <= row.get("date", "") <= period_end
+        row_date = safe_iso_date(row.get("date"))
+        return row_date is not None and (not period_start or not period_end or period_start <= row_date.isoformat() <= period_end)
     fifo_cost_by_sale = {
         row["transaction_id"]: event_cost_amount(row)
         for row in (reconciliation or {}).get("sales_cost_events", [])
         if in_period(row) and row.get("event_type") in {"sale", "sale_cancellation"}
     }
     for row in (reconciliation or {}).get("unconfirmed_quantity_events", (reconciliation or {}).get("sales_cost_events", [])):
-        if in_period(row) and row.get("event_type") in {"sale", "sale_cancellation"}:
-            unconfirmed_by_day[date.fromisoformat(row["date"])] += float(row.get("unconfirmed_quantity_delta") or 0)
+        event_date = safe_iso_date(row.get("date"))
+        if event_date is not None and in_period(row) and row.get("event_type") in {"sale", "sale_cancellation", "shortage_backfill"}:
+            unconfirmed_delta_by_day[event_date] += decimal_amount(row.get("unconfirmed_quantity_delta")) or Decimal("0")
 
     error_keys = {
         error_key(row)
@@ -205,11 +221,13 @@ def weekly_purchase_sales_amounts(
 
     for row in purchase_records:
         if in_period(row):
-            date_values.append(date.fromisoformat(row["date"]))
+            date_values.append(safe_iso_date(row["date"]))
     for row in sales_records:
         if not in_period(row):
             continue
-        row_date = date.fromisoformat(row["date"])
+        row_date = safe_iso_date(row.get("date"))
+        if row_date is None:
+            continue
         supply_amount = decimal_amount(row.get("supply_amount"))
         if supply_amount is not None and error_key(row, "sales") not in error_keys:
             sales_by_day[row_date] += supply_amount
@@ -225,7 +243,7 @@ def weekly_purchase_sales_amounts(
         return []
 
     grouped: dict[date, dict[str, Any]] = defaultdict(
-        lambda: {"row_count": 0, "quantity": 0, "sales_amount": Decimal("0"), "cost_amount": Decimal("0"), "unconfirmed_quantity": 0, "error_count": 0}
+        lambda: {"row_count": 0, "quantity": 0, "sales_amount": Decimal("0"), "cost_amount": Decimal("0"), "unconfirmed_quantity_delta": Decimal("0"), "current_unconfirmed_quantity": Decimal("0"), "error_count": 0}
     )
     current = min(date_values)
     end_date = max(date_values)
@@ -234,7 +252,7 @@ def weekly_purchase_sales_amounts(
         grouped[week_start(current.isoformat())]["quantity"] += quantity_by_day.get(current, 0)
         grouped[week_start(current.isoformat())]["sales_amount"] += sales_by_day.get(current, 0)
         grouped[week_start(current.isoformat())]["cost_amount"] += cost_by_day.get(current, 0)
-        grouped[week_start(current.isoformat())]["unconfirmed_quantity"] += unconfirmed_by_day.get(current, 0)
+        grouped[week_start(current.isoformat())]["unconfirmed_quantity_delta"] += unconfirmed_delta_by_day.get(current, Decimal("0"))
         grouped[week_start(current.isoformat())]["error_count"] += errors_by_day.get(current, 0)
         current += timedelta(days=1)
 
@@ -244,7 +262,13 @@ def weekly_purchase_sales_amounts(
         sales_amount = rounded_amount(sales_amount)
         cost_amount = rounded_amount(grouped[start]["cost_amount"])
         margin_amount = sales_amount - cost_amount
-        margin_status = "error" if grouped[start]["error_count"] else ("provisional" if grouped[start]["unconfirmed_quantity"] else "confirmed")
+        sale_states = {
+            row.get("sale_id"): decimal_amount(row.get("unconfirmed_quantity")) or Decimal("0")
+            for row in (reconciliation or {}).get("sales_allocations", [])
+            if row.get("in_analysis_period") and safe_iso_date(row.get("date")) and week_start(row["date"]) == start
+        }
+        grouped[start]["current_unconfirmed_quantity"] = sum(sale_states.values(), Decimal("0"))
+        margin_status = "error" if grouped[start]["error_count"] else ("provisional" if grouped[start]["current_unconfirmed_quantity"] else "confirmed")
         result.append(
             {
                 "week_start": start.isoformat(),
@@ -255,7 +279,9 @@ def weekly_purchase_sales_amounts(
                 "cost_amount": cost_amount,
                 "margin_amount": margin_amount,
                 "margin_rate": (margin_amount / sales_amount * 100) if sales_amount and margin_status == "confirmed" else None,
-                "unconfirmed_quantity": grouped[start]["unconfirmed_quantity"],
+                "unconfirmed_quantity": float(grouped[start]["current_unconfirmed_quantity"]),
+                "current_unconfirmed_quantity": float(grouped[start]["current_unconfirmed_quantity"]),
+                "unconfirmed_quantity_delta": float(grouped[start]["unconfirmed_quantity_delta"]),
                 "error_count": grouped[start]["error_count"],
                 "margin_status": margin_status,
             }
@@ -491,6 +517,11 @@ def principal_sales_cost_rows(
             for row in (reconciliation or {}).get("sales_allocations", [])
             if row.get("in_analysis_period")
         }
+    current_unconfirmed_by_transaction = {
+        row.get("sale_id"): decimal_amount(row.get("unconfirmed_quantity")) or Decimal("0")
+        for row in (reconciliation or {}).get("sales_allocations", [])
+        if row.get("in_analysis_period")
+    }
     unconfirmed_delta_by_transaction: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     for event in (reconciliation or {}).get("unconfirmed_quantity_events", (reconciliation or {}).get("sales_cost_events", [])):
         if event.get("event_type") not in {"sale", "sale_cancellation", "shortage_backfill"}:
@@ -506,7 +537,8 @@ def principal_sales_cost_rows(
             "sales_amount": Decimal("0"),
             "cost_amount": Decimal("0"),
             "missing_cost_row_count": 0,
-            "unconfirmed_quantity": 0,
+            "current_unconfirmed_quantity": Decimal("0"),
+            "unconfirmed_quantity_delta": Decimal("0"),
             "unconfirmed_row_count": 0,
             "error_count": 0,
         }
@@ -514,13 +546,17 @@ def principal_sales_cost_rows(
     error_keys = {
         error_key(error)
         for error in (reconciliation or {}).get("errors", [])
-        if error.get("source") == "sales" and (error.get("affects_revenue") or error.get("affects_fifo_cost"))
+        if error.get("source") == "sales" and safe_iso_date(error.get("date")) is not None
+        and (not (reconciliation or {}).get("metadata", {}).get("period_start")
+             or (reconciliation or {}).get("metadata", {}).get("period_start") <= error["date"] <= (reconciliation or {}).get("metadata", {}).get("period_end"))
+        and (error.get("affects_revenue") or error.get("affects_fifo_cost"))
     }
     for row in sales_records:
         if reconciliation:
             period_start = (reconciliation.get("metadata") or {}).get("period_start")
             period_end = (reconciliation.get("metadata") or {}).get("period_end")
-            if period_start and period_end and not (period_start <= row.get("date", "") <= period_end):
+            row_date = safe_iso_date(row.get("date"))
+            if row_date is None or (period_start and period_end and not (period_start <= row_date.isoformat() <= period_end)):
                 continue
         voucher_key = f"{row['date']}-{row['voucher']}"
         principal = principal_by_voucher.get(voucher_key, "(원청 없음)")
@@ -536,13 +572,20 @@ def principal_sales_cost_rows(
             group["missing_cost_row_count"] += 1
             continue
         group["cost_amount"] += event_cost_amount(sale)
+        current_unconfirmed = current_unconfirmed_by_transaction.get(sale_key(row), Decimal("0"))
         unconfirmed_delta = unconfirmed_delta_by_transaction.get(sale_key(row), Decimal("0"))
-        if unconfirmed_delta:
-            group["unconfirmed_quantity"] += float(unconfirmed_delta)
+        if current_unconfirmed:
+            group["current_unconfirmed_quantity"] += current_unconfirmed
             group["unconfirmed_row_count"] += 1
+        group["unconfirmed_quantity_delta"] += unconfirmed_delta
 
     for row in sales_records:
         if error_key(row, "sales") not in error_keys:
+            continue
+        row_date = safe_iso_date(row.get("date"))
+        period_start = ((reconciliation or {}).get("metadata") or {}).get("period_start")
+        period_end = ((reconciliation or {}).get("metadata") or {}).get("period_end")
+        if row_date is None or (period_start and period_end and not (period_start <= row_date.isoformat() <= period_end)):
             continue
         voucher_key = f"{row['date']}-{row['voucher']}"
         grouped[principal_by_voucher.get(voucher_key, "(원청 없음)")]["error_count"] += 1
@@ -552,7 +595,7 @@ def principal_sales_cost_rows(
         sales_amount = rounded_amount(values["sales_amount"])
         cost_amount = rounded_amount(values["cost_amount"])
         margin_amount = sales_amount - cost_amount
-        margin_status = "error" if values["error_count"] or values["missing_cost_row_count"] else ("provisional" if values["unconfirmed_quantity"] else "confirmed")
+        margin_status = "error" if values["error_count"] or values["missing_cost_row_count"] else ("provisional" if values["current_unconfirmed_quantity"] else "confirmed")
         rows.append(
             {
                 "principal": values["principal"],
@@ -563,7 +606,9 @@ def principal_sales_cost_rows(
                 "margin_amount": margin_amount,
                 "margin_rate": (margin_amount / sales_amount * 100) if sales_amount and margin_status == "confirmed" else None,
                 "missing_cost_row_count": values["missing_cost_row_count"],
-                "unconfirmed_quantity": values["unconfirmed_quantity"],
+                "unconfirmed_quantity": float(values["current_unconfirmed_quantity"]),
+                "current_unconfirmed_quantity": float(values["current_unconfirmed_quantity"]),
+                "unconfirmed_quantity_delta": float(values["unconfirmed_quantity_delta"]),
                 "unconfirmed_row_count": values["unconfirmed_row_count"],
                 "error_count": values["error_count"],
                 "margin_status": margin_status,
@@ -744,12 +789,10 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     sales_amount = reconciliation["sales_amount"]
     inventory_fifo = reconciliation.get("inventory_amount_at_fifo", reconciliation.get("ending_fifo_inventory_amount", 0))
     remainder_fifo = reconciliation.get("remainder_at_fifo", reconciliation.get("gross_profit", 0))
-    amount_balance_chart = render_amount_balance_chart(
-        purchase_amount,
-        sales_amount,
-        inventory_fifo,
-        remainder_fifo,
-    )
+    # The enriched renderer owns this optional chart.  A fixed marker avoids
+    # structurally searching generated HTML when a negative value makes the
+    # chart renderer return an explanatory note instead of a wrapper element.
+    amount_balance_chart = "<!-- AMOUNT_BALANCE_CHART -->"
     weekly_amounts = weekly_purchase_sales_amounts(
         sources["purchase"]["records"],
         sources["sales"]["records"],

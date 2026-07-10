@@ -23,12 +23,6 @@ def _numeric_frame(records: list[dict[str, Any]], columns: tuple[str, ...]) -> p
     return frame
 
 
-def _exact_cost_series(frame: pd.DataFrame) -> pd.Series:
-    """Prefer the serialized Decimal amount; legacy display amount is fallback."""
-    source = frame["cost_amount_exact"] if "cost_amount_exact" in frame else frame.get("cost_amount", pd.Series(0, index=frame.index))
-    return source.map(lambda value: float(Decimal(str(value))) if value not in (None, "") else 0.0)
-
-
 def _display_money(value: Any) -> int:
     return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
@@ -106,125 +100,78 @@ def weekly_inventory_flow_rows(
     inventory_records: list[dict[str, Any]],
     reconciliation: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build weekly inventory flow from period purchase costs and FIFO sale costs."""
-    purchase_df = _numeric_frame(purchase_records, ("quantity", "supply_amount", "unit_price", "product_id"))
-    sales_df = _numeric_frame(sales_records, ("quantity", "supply_amount", "total_amount", "product_id"))
-
-    for frame in (purchase_df, sales_df):
-        if "date" not in frame:
-            frame["date"] = pd.Series(dtype="datetime64[ns]")
-        frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
-        frame.dropna(subset=["date"], inplace=True)
-
+    """Build the flow in Decimal; display rounding happens only at the end."""
     metadata = (reconciliation or {}).get("metadata", {})
-    period_start = metadata.get("period_start")
-    period_end = metadata.get("period_end")
-    if period_start and period_end:
-        purchase_df = purchase_df[(purchase_df["date"] >= pd.Timestamp(period_start)) & (purchase_df["date"] <= pd.Timestamp(period_end))].copy()
-        sales_df = sales_df[(sales_df["date"] >= pd.Timestamp(period_start)) & (sales_df["date"] <= pd.Timestamp(period_end))].copy()
+    period_start, period_end = metadata.get("period_start"), metadata.get("period_end")
 
-    date_starts = [
-        value
-        for value in (
-            purchase_df["date"].min() if not purchase_df.empty else pd.NaT,
-            sales_df["date"].min() if not sales_df.empty else pd.NaT,
-        )
-        if not pd.isna(value)
-    ]
-    date_ends = [
-        value
-        for value in (
-            purchase_df["date"].max() if not purchase_df.empty else pd.NaT,
-            sales_df["date"].max() if not sales_df.empty else pd.NaT,
-        )
-        if not pd.isna(value)
-    ]
-    if not date_starts or not date_ends:
+    def valid_period_date(row: dict[str, Any]) -> Any:
+        value = _base.safe_iso_date(row.get("date"))
+        if value is None or (period_start and period_end and not (period_start <= value.isoformat() <= period_end)):
+            return None
+        return value
+
+    dates = [value for row in [*purchase_records, *sales_records] if (value := valid_period_date(row))]
+    if not dates:
         return []
+    daily: dict[Any, dict[str, Decimal]] = {}
+    def day(value: Any) -> dict[str, Decimal]:
+        return daily.setdefault(value, {"purchase": Decimal("0"), "sales": Decimal("0"), "outbound": Decimal("0"), "inventory_delta": Decimal("0")})
 
-    purchase_events = pd.DataFrame((reconciliation or {}).get("purchase_cost_events", [])).copy()
-    sales_events = pd.DataFrame((reconciliation or {}).get("sales_cost_events", [])).copy()
-    inventory_events = pd.DataFrame((reconciliation or {}).get("inventory_cost_events", [])).copy()
-    for frame in (purchase_events, sales_events, inventory_events):
-        if "date" not in frame:
-            frame["date"] = pd.Series(dtype="datetime64[ns]")
-        frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
-        frame.dropna(subset=["date"], inplace=True)
-        if period_start and period_end:
-            frame.drop(frame[(frame["date"] < pd.Timestamp(period_start)) | (frame["date"] > pd.Timestamp(period_end))].index, inplace=True)
-    if purchase_events.empty:
-        purchase_df["purchase_cost"] = purchase_df["quantity"] * purchase_df.get("unit_price", 0) if "unit_price" in purchase_df else purchase_df["supply_amount"]
+    error_keys = {
+        _base.error_key(error) for error in (reconciliation or {}).get("errors", [])
+        if error.get("source") == "sales" and valid_period_date(error)
+        and (error.get("affects_revenue") or error.get("affects_fifo_cost"))
+    }
+    for row in sales_records:
+        value = valid_period_date(row)
+        amount = _base.decimal_amount(row.get("supply_amount"))
+        if value and amount is not None and _base.error_key(row, "sales") not in error_keys:
+            day(value)["sales"] += amount
+
+    inventory_events = (reconciliation or {}).get("inventory_cost_events", [])
+    if inventory_events:
+        for event in inventory_events:
+            value = valid_period_date(event)
+            if value is None:
+                continue
+            amount = _base.event_cost_amount(event)
+            if event.get("event_type") in {"purchase", "purchase_cancellation"}:
+                day(value)["purchase"] += amount
+            else:
+                day(value)["outbound"] -= amount
+                day(value)["inventory_delta"] += amount
     else:
-        purchase_events["purchase_cost"] = _exact_cost_series(purchase_events)
-    if sales_events.empty:
-        fifo_costs = {
-            row["sale_id"]: float(row.get("fifo_cost_amount") or 0)
-            for row in (reconciliation or {}).get("sales_allocations", [])
-            if row.get("in_analysis_period")
-        }
-        sales_df["sale_id"] = sales_df.apply(
-            lambda row: f"{row.get('date').date().isoformat()}|{row.get('voucher')}|{row.get('excel_row')}", axis=1
-        ) if not sales_df.empty else pd.Series(dtype="object")
-        sales_df["outbound_cost"] = sales_df["sale_id"].map(fifo_costs).fillna(0) if not sales_df.empty else 0.0
-        sales_df["inventory_cost_delta"] = -sales_df["outbound_cost"]
-    else:
-        sales_events["inventory_cost_amount"] = pd.to_numeric(sales_events.get("inventory_cost_amount_exact", sales_events.get("inventory_cost_amount", 0)), errors="coerce").fillna(0)
-        sales_events["cost_amount"] = _exact_cost_series(sales_events)
-        sales_events["inventory_cost_delta"] = sales_events.apply(lambda row: row["inventory_cost_amount"] if row.get("event_type") == "sale_cancellation" else -row["inventory_cost_amount"], axis=1)
-        sales_events["outbound_cost"] = sales_events.apply(lambda row: -row["cost_amount"] if row.get("event_type") == "sale_cancellation" else row["cost_amount"], axis=1)
+        for row in purchase_records:
+            value = valid_period_date(row)
+            if value:
+                day(value)["purchase"] += (_base.decimal_amount(row.get("quantity")) or Decimal("0")) * (_base.decimal_amount(row.get("unit_price")) or Decimal("0"))
+        for event in (reconciliation or {}).get("sales_cost_events", []):
+            value = valid_period_date(event)
+            if value:
+                amount = _base.event_cost_amount(event)
+                if event.get("event_type") == "sale_cancellation":
+                    amount = -amount
+                day(value)["outbound"] += amount
+                day(value)["inventory_delta"] -= amount
 
-    has_inventory_events = not inventory_events.empty
-    if has_inventory_events:
-        inventory_events["cost_amount"] = _exact_cost_series(inventory_events)
-        purchase_flow = inventory_events[inventory_events["event_type"].isin(["purchase", "purchase_cancellation"])]
-        outbound_flow = inventory_events[~inventory_events["event_type"].isin(["purchase", "purchase_cancellation"])]
-    else:
-        purchase_flow = purchase_events if not purchase_events.empty else purchase_df
-        outbound_flow = sales_events
-    daily = pd.DataFrame(index=pd.date_range(min(date_starts), max(date_ends), freq="D"))
-    daily["purchase_increase"] = purchase_flow.groupby("date")["cost_amount" if "cost_amount" in purchase_flow else "purchase_cost"].sum()
-    # Supply amount is the P&L basis; a missing value is excluded rather than
-    # silently replaced with VAT-inclusive total_amount.
-    daily["sales_amount"] = sales_df.groupby("date")["supply_amount"].sum()
-    daily["outbound_cost_estimate"] = (
-        -outbound_flow.groupby("date")["cost_amount"].sum()
-        if has_inventory_events and not outbound_flow.empty
-        else (sales_events.groupby("date")["outbound_cost"].sum() if not sales_events.empty else sales_df.groupby("date")["outbound_cost"].sum())
-    )
-    daily = daily.fillna(0)
-    inventory_cost_delta = (
-        outbound_flow.groupby("date")["cost_amount"].sum()
-        if has_inventory_events and not outbound_flow.empty
-        else (sales_events.groupby("date")["inventory_cost_delta"].sum() if not sales_events.empty else sales_df.groupby("date")["inventory_cost_delta"].sum())
-    )
-    daily["net_change"] = (daily["purchase_increase"] + inventory_cost_delta).fillna(0)
-
-    opening_stock_amount = float((reconciliation or {}).get("summary", {}).get("opening_stock_amount", 0))
-    daily["estimated_inventory_amount"] = opening_stock_amount + daily["net_change"].cumsum()
-    daily["week_start"] = [
-        _base.week_start(timestamp.date().isoformat()).isoformat() for timestamp in daily.index.to_pydatetime()
-    ]
-    weekly = daily.groupby("week_start", sort=True).agg(
-        {
-            "purchase_increase": "sum",
-            "sales_amount": "sum",
-            "outbound_cost_estimate": "sum",
-            "net_change": "sum",
-            "estimated_inventory_amount": "last",
-        }
-    )
-
+    weekly: dict[Any, dict[str, Decimal]] = {}
+    running = _base.decimal_amount((reconciliation or {}).get("summary", {}).get("opening_stock_amount")) or Decimal("0")
+    current = min(dates)
+    while current <= max(dates):
+        values = day(current)
+        net_change = values["purchase"] + values["inventory_delta"]
+        running += net_change
+        start = _base.week_start(current.isoformat())
+        group = weekly.setdefault(start, {"purchase": Decimal("0"), "sales": Decimal("0"), "outbound": Decimal("0"), "net_change": Decimal("0"), "inventory": running})
+        group["purchase"] += values["purchase"]
+        group["sales"] += values["sales"]
+        group["outbound"] += values["outbound"]
+        group["net_change"] += net_change
+        group["inventory"] = running
+        current += _base.timedelta(days=1)
     return [
-        {
-            "week_start": week_start,
-            "label": f"{pd.Timestamp(week_start).month}/{pd.Timestamp(week_start).day}",
-            "purchase_increase": _display_money(row["purchase_increase"]),
-            "sales_amount": _display_money(row["sales_amount"]),
-            "outbound_cost_estimate": _display_money(row["outbound_cost_estimate"]),
-            "net_change": _display_money(row["net_change"]),
-            "estimated_inventory_amount": _display_money(row["estimated_inventory_amount"]),
-        }
-        for week_start, row in weekly.iterrows()
+        {"week_start": start.isoformat(), "label": f"{start.month}/{start.day}", "purchase_increase": _display_money(row["purchase"]), "sales_amount": _display_money(row["sales"]), "outbound_cost_estimate": _display_money(row["outbound"]), "net_change": _display_money(row["net_change"]), "estimated_inventory_amount": _display_money(row["inventory"])}
+        for start, row in sorted(weekly.items())
     ]
 
 
@@ -254,13 +201,15 @@ def render_problem_item_rows(payload: dict[str, Any]) -> str:
         or row.get("product_id") in error_codes
     ]
     if not problems:
-        return '<tr><td colspan="10">없음</td></tr>'
+        return '<tr><td colspan="12">없음</td></tr>'
     return "\n".join(
         "<tr>"
         f"<td>{escape(str(row.get('product_id') if row.get('product_id') is not None else '-'))}</td>"
         f"<td>{escape(str(row.get('item_name') or '-'))}</td>"
         f"<td><code>{escape(str(row.get('cost_status') or '-'))}</code></td>"
-        f"<td class=\"money\">{_base.number(row.get('unconfirmed_quantity') or 0)}</td>"
+        f"<td class=\"money\">{_base.number(row.get('opening_unconfirmed_quantity') or 0)}</td>"
+        f"<td class=\"money\">{_base.number(row.get('period_unconfirmed_quantity') or 0)}</td>"
+        f"<td class=\"money\">{_base.number(row.get('all_unconfirmed_quantity', row.get('unconfirmed_quantity')) or 0)}</td>"
         f"<td class=\"money\">{_base.number(row.get('ending_negative_stock_quantity') or 0)}</td>"
         f"<td class=\"money\">{_base.number(row.get('inventory_book_quantity') or 0)}</td>"
         f"<td class=\"money\">{_base.number(row.get('inventory_sheet_quantity')) if row.get('inventory_sheet_quantity') is not None else '-'}</td>"
@@ -307,8 +256,11 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     reconciliation = reconciliation_payload["summary"]
     period_start = reconciliation_payload.get("metadata", {}).get("period_start")
     period_end = reconciliation_payload.get("metadata", {}).get("period_end")
-    period_purchases = [row for row in purchase_records if not period_start or period_start <= row.get("date", "") <= period_end]
-    period_sales = [row for row in sales_records if not period_start or period_start <= row.get("date", "") <= period_end]
+    def in_period(row: dict[str, Any]) -> bool:
+        row_date = _base.safe_iso_date(row.get("date"))
+        return row_date is not None and (not period_start or not period_end or period_start <= row_date.isoformat() <= period_end)
+    period_purchases = [row for row in purchase_records if in_period(row)]
+    period_sales = [row for row in sales_records if in_period(row)]
 
     summary_rows_html = "\n".join(
         [
@@ -349,7 +301,8 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     fifo_sales_cost = reconciliation.get("fifo_sales_cost_amount", 0)
     gross_profit_label = "매출총이익" if reconciliation.get("gross_profit_status") == "confirmed" else "잠정 매출총이익"
     vat_settlement = reconciliation.get("vat_settlement_amount", 0)
-    vat_label = "부가세 납부 예상액" if vat_settlement > 0 else ("부가세 환급 예상액" if vat_settlement < 0 else "부가세 정산금")
+    vat_error = reconciliation.get("vat_settlement_status") == "validation_error"
+    vat_label = "잠정 부가세 정산금" if vat_error else ("부가세 납부 예상액" if vat_settlement > 0 else ("부가세 환급 예상액" if vat_settlement < 0 else "부가세 정산금"))
     status_rows = "".join(
         f"<li><code>{escape(status)}</code>: {_base.number(count)}개 품목</li>"
         for status, count in reconciliation.get("cost_status_counts", {}).items()
@@ -373,13 +326,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
             prior_shortage_settlement_amount,
             reconciliation_remainder,
         )
-    chart_start = '<div class="chart-wrap balance-chart-wrap" aria-label="금액 대사 밸런스 블록 차트">'
-    chart_end = "      </div>"
-    chart_start_index = html.find(chart_start)
-    chart_end_index = html.find(chart_end, chart_start_index)
-    if chart_start_index < 0 or chart_end_index < 0:
-        raise RuntimeError("amount balance chart replacement marker not found")
-    html = html[:chart_start_index] + amount_balance_chart + html[chart_end_index + len(chart_end):]
+    html = _replace_once(html, "<!-- AMOUNT_BALANCE_CHART -->", amount_balance_chart, "amount balance chart")
 
     amount_rows = [
         ("기초재고금액", "분석 시작일 직전 FIFO 잔여 원가층", _base.money(opening_amount)),
@@ -434,7 +381,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
             <tr><th>매입 부가세</th><td class="money">{_base.money(reconciliation.get('period_purchase_vat_amount', 0))}</td></tr>
             <tr><th>매입 합계금액</th><td class="money">{_base.money(reconciliation.get('period_purchase_total_amount', 0))}</td></tr>
             <tr><th>{escape(vat_label)}</th><td class="money">{_base.money(abs(vat_settlement))}</td></tr>
-            <tr><th>{'잠정 참고값' if reconciliation.get('gross_profit_status') != 'confirmed' else '부가세 정산 후 잔여금액'}</th><td class="money">{_base.money(reconciliation.get('post_vat_reference_amount', 0))}</td></tr>
+            <tr><th>{'부가세 정산 후 잔여금액' if reconciliation.get('post_vat_reference_status') == 'confirmed' else ('검증 필요' if reconciliation.get('post_vat_reference_status') == 'error' else '잠정 참고값')}</th><td class="money">{_base.money(reconciliation.get('post_vat_reference_amount', 0))}</td></tr>
           </tbody></table>
           <p class="section-note">거래금액 검증 오류 {escape(_base.number(reconciliation.get('amount_validation_error_count', 0)))}건 · 정산 상태 <code>{escape(str(reconciliation.get('vat_settlement_status', '-')))}</code></p>
       </section>
@@ -485,7 +432,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         <section aria-labelledby="fifo-status-title">
           <h3 id="fifo-status-title">FIFO 원가 상태</h3>
           <ul>{status_rows}</ul>
-          <p class="section-note">미확정 출고 {escape(_base.number(reconciliation.get('unconfirmed_quantity', 0)))}개 · 오류 {_base.number(reconciliation.get('error_count', 0))}건</p>
+          <p class="section-note">기초 미확정 출고 {escape(_base.number(reconciliation.get('opening_unconfirmed_quantity', 0)))}개 · 기간 미확정 출고 {escape(_base.number(reconciliation.get('period_unconfirmed_quantity', 0)))}개 · 전체 미확정 출고 {escape(_base.number(reconciliation.get('all_unconfirmed_quantity', reconciliation.get('unconfirmed_quantity', 0))))}개 · 오류 {_base.number(reconciliation.get('error_count', 0))}건</p>
         </section>
         <section aria-labelledby="stock-reconciliation-title">
           <h3 id="stock-reconciliation-title">재고 기준일 수량 대사</h3>
@@ -495,7 +442,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         </section>
         <section aria-labelledby="problem-items-title">
           <h3 id="problem-items-title">문제 품목 상세</h3>
-          <div class="table-scroll"><table><thead><tr><th>product_id</th><th>품명</th><th>원가 상태</th><th>미확정 수량</th><th>종료일 음수재고</th><th>기준일 장부수량</th><th>재고 시트 수량</th><th>수량 차이</th><th>수량 대사 상태</th><th>오류/경고</th></tr></thead><tbody>{problem_rows}</tbody></table></div>
+          <div class="table-scroll"><table><thead><tr><th>product_id</th><th>품명</th><th>원가 상태</th><th>기초 미확정 출고</th><th>기간 미확정 출고</th><th>전체 미확정 수량</th><th>종료일 음수재고</th><th>기준일 장부수량</th><th>재고 시트 수량</th><th>수량 차이</th><th>수량 대사 상태</th><th>오류/경고</th></tr></thead><tbody>{problem_rows}</tbody></table></div>
         </section>
         <section aria-labelledby="transaction-errors-title">
           <h3 id="transaction-errors-title">거래 단위 오류 상세</h3>
