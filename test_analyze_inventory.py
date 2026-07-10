@@ -23,11 +23,11 @@ def sale(date: str, quantity: int, *, product_id=1, voucher=1, excel_row=1, amou
     }
 
 
-def inventory(quantity: int, *, product_id=1, average_cost=999999, latest_purchase_price=888888, name="Item", spec="A") -> dict:
+def inventory(quantity: int, *, product_id=1, average_cost=999999, latest_purchase_price=888888, name="Item", spec="A", excel_row=None) -> dict:
     return {
         "product_id": product_id, "stock_quantity": quantity,
         "average_cost": average_cost, "latest_purchase_price": latest_purchase_price,
-        "item_name": name, "specification": spec,
+        "item_name": name, "specification": spec, "excel_row": excel_row,
     }
 
 
@@ -453,7 +453,7 @@ class InventoryAnalysisTests(unittest.TestCase):
         self.assertEqual(row["inventory_quantity_difference"], 0)
         self.assertEqual(
             (row["quantity_reconciliation_status"], row["quantity_reconciliation_validation_status"]),
-            ("validation_error", "error"),
+            ("validation_error", "validation_error"),
         )
         self.assertEqual(result["summary"]["quantity_validation_error_count"], 1)
         self.assertFalse(state["quantity_valid"])
@@ -527,6 +527,160 @@ class InventoryAnalysisTests(unittest.TestCase):
         self.assertEqual(
             (result["rows"][0]["quantity_reconciliation_status"], result["rows"][0]["quantity_reconciliation_validation_status"]),
             ("match", "valid"),
+        )
+
+    def test_inventory_snapshot_invalid_quantities_are_preserved_not_zeroed(self):
+        for raw, expected_status in ((None, "missing_stock_quantity"), ("", "missing_stock_quantity"), ("invalid", "invalid_stock_quantity")):
+            with self.subTest(stock_quantity=raw):
+                result = analyze([purchase("2026-01-01", 1, 100)], [], [inventory(raw)])
+                row, state, summary = result["rows"][0], result["inventory_validations"][0], result["summary"]
+
+                self.assertEqual(row["inventory_sheet_quantity"], None)
+                self.assertEqual(row["inventory_quantity_difference"], None)
+                self.assertEqual(
+                    (row["inventory_validation_status"], row["quantity_reconciliation_status"]),
+                    (expected_status, "validation_error"),
+                )
+                self.assertEqual(
+                    (state["product_id_valid"], state["stock_quantity_valid"], state["inventory_reconciliation_eligible"], state["inventory_validation_status"]),
+                    (True, False, False, expected_status),
+                )
+                self.assertEqual(
+                    (summary["inventory_snapshot_validation_error_count"], summary["quantity_difference_count"], summary["quantity_reconciliation_validation_status"]),
+                    (1, 0, "validation_error"),
+                )
+
+    def test_inventory_snapshot_errors_are_product_or_global_without_hiding_valid_rows(self):
+        mixed = analyze(
+            [purchase("2026-01-01", 4, 100)], [],
+            [inventory(4), inventory("invalid", excel_row=2)],
+        )
+        row = mixed["rows"][0]
+        self.assertEqual(
+            (row["inventory_sheet_quantity"], row["inventory_validation_status"], row["quantity_reconciliation_status"]),
+            (4, "invalid_stock_quantity", "validation_error"),
+        )
+
+        global_error = analyze(
+            [purchase("2026-01-01", 1, 100)], [],
+            [inventory("invalid", product_id=None)],
+        )
+        state, summary = global_error["inventory_validations"][0], global_error["summary"]
+        self.assertEqual(
+            (state["product_id_valid"], state["stock_quantity_valid"], state["inventory_reconciliation_eligible"]),
+            (False, False, False),
+        )
+        self.assertEqual(
+            (summary["inventory_snapshot_validation_error_count"], summary["global_inventory_snapshot_validation_error_count"], summary["quantity_reconciliation_validation_status"]),
+            (1, 1, "validation_error"),
+        )
+        self.assertEqual(
+            {error["code"] for error in global_error["errors"]},
+            {"missing_inventory_product_id", "invalid_stock_quantity"},
+        )
+
+    def test_date_and_product_eligibility_errors_invalidate_only_current_scope(self):
+        invalid_date = purchase("2026/01/01", 1, 100)
+        product_result = analyze([invalid_date], [], [inventory(1)])
+        self.assertEqual(
+            (product_result["rows"][0]["ledger_quantity_validation_status"], product_result["rows"][0]["quantity_reconciliation_status"]),
+            ("validation_error", "validation_error"),
+        )
+
+        global_date = purchase("2026/01/01", 1, 100, product_id=None)
+        global_date_result = analyze([global_date], [], [])
+        self.assertEqual(
+            (global_date_result["summary"]["global_quantity_validation_error_count"], global_date_result["summary"]["quantity_reconciliation_validation_status"]),
+            (1, "validation_error"),
+        )
+
+        missing_purchase = purchase("2026-01-01", 1, 100, product_id=None)
+        missing_sale = sale("2026-01-02", 1, product_id=None)
+        before_stock_date = analyze([missing_purchase], [missing_sale], [])
+        self.assertEqual(
+            (before_stock_date["summary"]["quantity_validation_error_count"], before_stock_date["summary"]["global_quantity_validation_error_count"]),
+            (2, 2),
+        )
+
+        after_stock_date = analyze(
+            [purchase("2026-01-01", 1, 100), purchase("2027-01-01", 1, 100, product_id=None)],
+            [], [inventory(1)], stock_date="2026-12-31",
+        )
+        self.assertEqual(
+            (after_stock_date["rows"][0]["quantity_reconciliation_status"], after_stock_date["summary"]["global_quantity_validation_error_count"], after_stock_date["summary"]["quantity_reconciliation_validation_status"]),
+            ("match", 0, "valid"),
+        )
+
+    def test_opening_ledger_quantity_is_separate_from_costed_fifo_layers(self):
+        missing_price = purchase("2025-12-31", 10, 100)
+        missing_price["unit_price"] = None
+        priced_gap = analyze(
+            [missing_price], [], [inventory(10)],
+            start="2026-01-01", end="2026-01-31", stock_date="2026-01-31",
+        )
+        row = priced_gap["rows"][0]
+        self.assertEqual(
+            (
+                row["opening_stock_quantity"], row["opening_signed_stock_quantity"],
+                row["opening_normal_stock_quantity"], row["opening_negative_stock_quantity"],
+                row["opening_costed_layer_quantity"], row["opening_stock_amount"], row["cost_status"],
+            ),
+            (10, 10, 10, 0, 0, 0, "error"),
+        )
+
+        negative_opening = analyze(
+            [], [sale("2025-12-31", 4)], [inventory(-4)],
+            start="2026-01-01", end="2026-01-31", stock_date="2026-01-31",
+        )["rows"][0]
+        self.assertEqual(
+            (
+                negative_opening["opening_stock_quantity"], negative_opening["opening_normal_stock_quantity"],
+                negative_opening["opening_negative_stock_quantity"], negative_opening["opening_costed_layer_quantity"],
+            ),
+            (-4, 0, 4, 0),
+        )
+
+    def test_productless_post_period_purchase_is_unassigned_backfill_dependency(self):
+        productless_purchase = purchase("2026-02-01", 5, 100, product_id=None)
+        result = analyze(
+            [productless_purchase], [sale("2026-01-10", 5, amount=500)], [inventory(-5)],
+            start="2026-01-01", end="2026-01-31", stock_date="2026-01-31",
+        )
+        error = next(error for error in result["errors"] if error["code"] == "missing_product_id")
+        self.assertEqual(
+            (
+                result["summary"]["backfill_dependency_error_count"],
+                result["summary"]["unassigned_backfill_validation_error"],
+                result["summary"]["gross_profit_status"],
+            ),
+            (1, True, "error"),
+        )
+        self.assertEqual(
+            (
+                error["fifo_error_scope"], error["backfill_dependency"], error["used_for_backfill"],
+                error["affected_sale_ids"], error["affected_product_ids"],
+            ),
+            ("backfill_dependency", True, None, [], []),
+        )
+
+    def test_quantity_difference_count_excludes_validation_and_one_sided_rows(self):
+        result = analyze(
+            [
+                purchase("2026-01-01", 5, 100, product_id=1),
+                purchase("2026-01-01", 1, 100, product_id=2, voucher=2, excel_row=2),
+                purchase("2026-01-01", 1, 100, product_id=4, voucher=3, excel_row=3),
+            ],
+            [],
+            [inventory(4, product_id=1), inventory("invalid", product_id=2), inventory(1, product_id=3)],
+        )
+        summary = result["summary"]
+        self.assertEqual(
+            (
+                summary["quantity_difference_count"], summary["quantity_reconciliation_mismatch_count"],
+                summary["quantity_reconciliation_validation_error_count"], summary["ledger_only_count"],
+                summary["inventory_only_count"], summary["quantity_reconciliation_non_match_count"],
+            ),
+            (1, 1, 1, 1, 1, 4),
         )
 
     def test_invalid_supply_is_excluded_without_total_amount_substitution(self):

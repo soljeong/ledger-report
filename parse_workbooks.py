@@ -351,6 +351,7 @@ def parse_inventory_workbook(
     records: list[dict[str, Any]] = []
     skipped_blank_rows = 0
     blank_stock_quantity_rows: list[int] = []
+    invalid_stock_quantity_rows: list[dict[str, Any]] = []
     negative_stock_rows: list[dict[str, Any]] = []
     stock_quantity = Decimal("0")
     stock_amount_at_average_cost = Decimal("0")
@@ -362,9 +363,16 @@ def parse_inventory_workbook(
             continue
         values = row_to_dict(row_values, header_map)
         stock_raw = values.get("stock_quantity")
-        if stock_raw is None:
+        stock_value = number_value(stock_raw)
+        stock_is_numeric = isinstance(stock_value, (int, float, Decimal)) and not isinstance(stock_value, bool)
+        if stock_value is None:
             blank_stock_quantity_rows.append(row_idx)
-        stock = decimal_number(stock_raw)
+        elif not stock_is_numeric:
+            invalid_stock_quantity_rows.append({"excel_row": row_idx, "stock_quantity": stock_value})
+        # An invalid snapshot quantity is retained for analysis-time
+        # eligibility validation.  It is not silently turned into zero for
+        # either the normalized record or the parser's valid-row totals.
+        stock = decimal_number(stock_value) if stock_is_numeric else Decimal("0")
         average_cost = decimal_number(values.get("average_cost"))
         latest_purchase_price = decimal_number(values.get("latest_purchase_price"))
 
@@ -374,7 +382,7 @@ def parse_inventory_workbook(
             "item_name": text_value(values.get("item_name")),
             "specification": text_value(values.get("specification")),
             "product_id": number_value(values.get("product_id")),
-            "stock_quantity": number_value(stock_raw) if stock_raw is not None else 0,
+            "stock_quantity": stock_value,
             "box_or_roll_stock": number_value(values.get("box_or_roll_stock")),
             "store_stock": number_value(values.get("store_stock")),
             "warehouse_stock": number_value(values.get("warehouse_stock")),
@@ -416,6 +424,8 @@ def parse_inventory_workbook(
             "skipped_blank_row_count": skipped_blank_rows,
             "blank_stock_quantity_row_count": len(blank_stock_quantity_rows),
             "blank_stock_quantity_rows": blank_stock_quantity_rows,
+            "invalid_stock_quantity_row_count": len(invalid_stock_quantity_rows),
+            "invalid_stock_quantity_rows": invalid_stock_quantity_rows,
             "negative_stock_row_count": len(negative_stock_rows),
             "negative_stock_rows": negative_stock_rows,
             "detail_totals": {
