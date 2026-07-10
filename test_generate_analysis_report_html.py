@@ -45,7 +45,9 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
             self.assertIn(text, html)
         self.assertIn("4,960", html)
         self.assertIn("1,510", html)
-        self.assertIn("4,500", html)
+        amount_section = html.split('id="amount-title"', 1)[1].split('</section>', 1)[0]
+        self.assertIn("잠정 매출총이익", amount_section)
+        self.assertIn("4,000", amount_section)
         self.assertNotIn("평균원가", html)
         self.assertNotIn("최종매입가", html)
         self.assertNotIn("purchase_unit_costs", html)

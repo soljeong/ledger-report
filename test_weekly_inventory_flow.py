@@ -76,7 +76,7 @@ class WeeklyInventoryFlowTests(unittest.TestCase):
 
         self.assertIn('class="report-page report-page--analysis"', html)
         self.assertIn("주간 재고금액 흐름: 매입은 위, 출고는 아래", html)
-        self.assertIn("주간 출고 감소·주간 매출금액", html)
+        self.assertIn("주간 출고 감소·주간 매출 공급가액", html)
         self.assertIn("주말 추정 재고금액", html)
         self.assertIn("5/4", html)
         self.assertIn("1,510", html)

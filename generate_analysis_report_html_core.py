@@ -133,6 +133,10 @@ def rounded_amount(value: Decimal) -> int:
     return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def exact_amount(value: Decimal) -> str:
+    return format(value, "f")
+
+
 def error_key(row: dict[str, Any], source: str | None = None) -> tuple[Any, Any, Any, Any, Any]:
     return (source or row.get("source"), row.get("date"), row.get("voucher"), row.get("excel_row"), row.get("product_id"))
 
@@ -217,11 +221,21 @@ def weekly_purchase_sales_amounts(
         for row in (reconciliation or {}).get("errors", [])
         if row.get("date") and in_period(row) and (row.get("affects_revenue") or row.get("affects_fifo_cost"))
     }
+    related_backfill_sale_ids = {
+        sale_id
+        for error in (reconciliation or {}).get("errors", [])
+        for sale_id in error.get("affected_sale_ids", [])
+    }
     errors_by_day: dict[date, int] = defaultdict(int)
 
     for row in purchase_records:
         if in_period(row):
             date_values.append(safe_iso_date(row["date"]))
+    related_backfill_sale_ids = {
+        sale_id
+        for error in (reconciliation or {}).get("errors", [])
+        for sale_id in error.get("affected_sale_ids", [])
+    }
     for row in sales_records:
         if not in_period(row):
             continue
@@ -235,7 +249,7 @@ def weekly_purchase_sales_amounts(
         cost_by_day[row_date] += fifo_cost_by_sale.get(sale_id, 0)
         quantity_by_day[row_date] += row.get("quantity") or 0
         row_count_by_day[row_date] += 1
-        if error_key(row, "sales") in error_keys:
+        if error_key(row, "sales") in error_keys or sale_id in related_backfill_sale_ids:
             errors_by_day[row_date] += 1
         date_values.append(row_date)
 
@@ -258,10 +272,12 @@ def weekly_purchase_sales_amounts(
 
     result: list[dict[str, Any]] = []
     for start in sorted(grouped):
-        sales_amount = grouped[start]["sales_amount"]
-        sales_amount = rounded_amount(sales_amount)
-        cost_amount = rounded_amount(grouped[start]["cost_amount"])
-        margin_amount = sales_amount - cost_amount
+        sales_amount_exact = grouped[start]["sales_amount"]
+        cost_amount_exact = grouped[start]["cost_amount"]
+        margin_amount_exact = sales_amount_exact - cost_amount_exact
+        sales_amount = rounded_amount(sales_amount_exact)
+        cost_amount = rounded_amount(cost_amount_exact)
+        margin_amount = rounded_amount(margin_amount_exact)
         sale_states = {
             row.get("sale_id"): decimal_amount(row.get("unconfirmed_quantity")) or Decimal("0")
             for row in (reconciliation or {}).get("sales_allocations", [])
@@ -276,8 +292,12 @@ def weekly_purchase_sales_amounts(
                 "row_count": grouped[start]["row_count"],
                 "quantity": grouped[start]["quantity"],
                 "sales_amount": sales_amount,
+                "sales_amount_exact": exact_amount(sales_amount_exact),
                 "cost_amount": cost_amount,
+                "cost_amount_exact": exact_amount(cost_amount_exact),
                 "margin_amount": margin_amount,
+                "margin_amount_exact": exact_amount(margin_amount_exact),
+                "rounding_difference": exact_amount(cost_amount_exact - Decimal(cost_amount)),
                 "margin_rate": (margin_amount / sales_amount * 100) if sales_amount and margin_status == "confirmed" else None,
                 "unconfirmed_quantity": float(grouped[start]["current_unconfirmed_quantity"]),
                 "current_unconfirmed_quantity": float(grouped[start]["current_unconfirmed_quantity"]),
@@ -351,7 +371,7 @@ def render_weekly_chart(rows: list[dict[str, Any]]) -> str:
       <div class="chart-wrap" aria-label="주간 매입 매출 금액 그래프">
         <svg viewBox="0 0 {chart_width} {chart_height}" role="img" aria-labelledby="weekly-chart-title weekly-chart-desc">
           <title id="weekly-chart-title">주간 매입/매출 금액</title>
-          <desc id="weekly-chart-desc">주별 매입금액과 매출금액을 비교한 막대 그래프</desc>
+          <desc id="weekly-chart-desc">주별 매입 원가와 매출 공급가액을 비교한 막대 그래프</desc>
           <g class="chart-guides">
             {''.join(guides)}
           </g>
@@ -423,7 +443,7 @@ def render_amount_balance_chart(
         <svg id="amount-balance-chart" viewBox="0 0 {chart_width} {chart_height}" role="img"
              aria-labelledby="amount-balance-title amount-balance-desc">
           <title id="amount-balance-title">밸런스 블록 차트: 매출과 재고의 합계, 이익과 매입의 합계</title>
-          <desc id="amount-balance-desc">왼쪽은 재고금액 위에 매출금액을, 오른쪽은 이익금액 위에 매입금액을 쌓아 양쪽 합계가 같은지 보여준다.</desc>
+          <desc id="amount-balance-desc">왼쪽은 재고금액 위에 매출 공급가액을, 오른쪽은 매출총이익 위에 매입원가를 쌓아 양쪽 합계가 같은지 보여준다.</desc>
           <defs>
             <pattern id="balance-remainder-hatch" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(35)">
               <rect width="10" height="10" fill="#fff7e8"></rect>
@@ -456,7 +476,7 @@ def render_amount_balance_chart(
 
 
 def render_weekly_table_rows(rows: list[dict[str, Any]]) -> str:
-    return "\n".join(
+    body = "\n".join(
         f"""
           <tr>
             <th>{escape(row['label'])}</th>
@@ -471,6 +491,11 @@ def render_weekly_table_rows(rows: list[dict[str, Any]]) -> str:
         """
         for row in rows
     )
+    total_sales = sum((decimal_amount(row.get("sales_amount_exact")) or Decimal("0") for row in rows), Decimal("0"))
+    total_cost = sum((decimal_amount(row.get("cost_amount_exact")) or Decimal("0") for row in rows), Decimal("0"))
+    total_margin = total_sales - total_cost
+    rounding_difference = rounded_amount(total_cost) - sum(row.get("cost_amount", 0) for row in rows)
+    return body + f'''\n          <tr class="total-row"><th>총계 (exact 합계)</th><td></td><td></td><td class="money">{money(rounded_amount(total_sales))}</td><td class="money">{money(rounded_amount(total_cost))}</td><td class="money">{money(rounded_amount(total_margin))}</td><td colspan="2">반올림 차이 {money(rounding_difference)}원</td></tr>'''
 
 
 def include_plotlyjs_option(value: Any) -> bool | str:
@@ -551,6 +576,11 @@ def principal_sales_cost_rows(
              or (reconciliation or {}).get("metadata", {}).get("period_start") <= error["date"] <= (reconciliation or {}).get("metadata", {}).get("period_end"))
         and (error.get("affects_revenue") or error.get("affects_fifo_cost"))
     }
+    related_backfill_sale_ids = {
+        sale_id
+        for error in (reconciliation or {}).get("errors", [])
+        for sale_id in error.get("affected_sale_ids", [])
+    }
     for row in sales_records:
         if reconciliation:
             period_start = (reconciliation.get("metadata") or {}).get("period_start")
@@ -572,6 +602,8 @@ def principal_sales_cost_rows(
             group["missing_cost_row_count"] += 1
             continue
         group["cost_amount"] += event_cost_amount(sale)
+        if sale_key(row) in related_backfill_sale_ids:
+            group["error_count"] += 1
         current_unconfirmed = current_unconfirmed_by_transaction.get(sale_key(row), Decimal("0"))
         unconfirmed_delta = unconfirmed_delta_by_transaction.get(sale_key(row), Decimal("0"))
         if current_unconfirmed:
@@ -592,9 +624,12 @@ def principal_sales_cost_rows(
 
     rows: list[dict[str, Any]] = []
     for values in grouped.values():
-        sales_amount = rounded_amount(values["sales_amount"])
-        cost_amount = rounded_amount(values["cost_amount"])
-        margin_amount = sales_amount - cost_amount
+        sales_amount_exact = values["sales_amount"]
+        cost_amount_exact = values["cost_amount"]
+        margin_amount_exact = sales_amount_exact - cost_amount_exact
+        sales_amount = rounded_amount(sales_amount_exact)
+        cost_amount = rounded_amount(cost_amount_exact)
+        margin_amount = rounded_amount(margin_amount_exact)
         margin_status = "error" if values["error_count"] or values["missing_cost_row_count"] else ("provisional" if values["current_unconfirmed_quantity"] else "confirmed")
         rows.append(
             {
@@ -602,8 +637,12 @@ def principal_sales_cost_rows(
                 "row_count": values["row_count"],
                 "quantity": values["quantity"],
                 "sales_amount": sales_amount,
+                "sales_amount_exact": exact_amount(sales_amount_exact),
                 "cost_amount": cost_amount,
+                "cost_amount_exact": exact_amount(cost_amount_exact),
                 "margin_amount": margin_amount,
+                "margin_amount_exact": exact_amount(margin_amount_exact),
+                "rounding_difference": exact_amount(cost_amount_exact - Decimal(cost_amount)),
                 "margin_rate": (margin_amount / sales_amount * 100) if sales_amount and margin_status == "confirmed" else None,
                 "missing_cost_row_count": values["missing_cost_row_count"],
                 "unconfirmed_quantity": float(values["current_unconfirmed_quantity"]),
@@ -623,7 +662,7 @@ def sale_key(row: dict[str, Any]) -> str:
 
 def render_principal_margin_chart(rows: list[dict[str, Any]]) -> str:
     if not rows:
-        return "<p class=\"section-note\">표시할 원청별 매출 메타데이터가 없다.</p>"
+        return "<p class=\"section-note\">표시할 원청별 매출 공급가액 메타데이터가 없다.</p>"
 
     chart_width = 960
     row_height = 54
@@ -655,10 +694,10 @@ def render_principal_margin_chart(rows: list[dict[str, Any]]) -> str:
         )
 
     return f"""
-      <div class="chart-wrap" aria-label="원청별 매출 원가 마진 그래프">
+      <div class="chart-wrap" aria-label="원청별 매출 공급가액, 원가, 마진 그래프">
         <svg viewBox="0 0 {chart_width} {chart_height}" role="img" aria-labelledby="principal-chart-title principal-chart-desc">
-          <title id="principal-chart-title">원청별 매출/원가/마진</title>
-          <desc id="principal-chart-desc">원청별 매출금액, FIFO 매출원가, 마진율을 비교한 그래프</desc>
+          <title id="principal-chart-title">원청별 매출 공급가액/원가/마진</title>
+          <desc id="principal-chart-desc">원청별 매출 공급가액, FIFO 매출원가, 마진율을 비교한 그래프</desc>
           <g>
             {''.join(elements)}
           </g>
@@ -668,7 +707,7 @@ def render_principal_margin_chart(rows: list[dict[str, Any]]) -> str:
 
 
 def render_principal_margin_rows(rows: list[dict[str, Any]]) -> str:
-    return "\n".join(
+    body = "\n".join(
         f"""
           <tr>
             <td class="rank">{index}</td>
@@ -684,6 +723,11 @@ def render_principal_margin_rows(rows: list[dict[str, Any]]) -> str:
         """
         for index, row in enumerate(rows, start=1)
     )
+    total_sales = sum((decimal_amount(row.get("sales_amount_exact")) or Decimal("0") for row in rows), Decimal("0"))
+    total_cost = sum((decimal_amount(row.get("cost_amount_exact")) or Decimal("0") for row in rows), Decimal("0"))
+    total_margin = total_sales - total_cost
+    rounding_difference = rounded_amount(total_cost) - sum(row.get("cost_amount", 0) for row in rows)
+    return body + f'''\n          <tr class="total-row"><td></td><th>총계 (exact 합계)</th><td></td><td class="money">{money(rounded_amount(total_sales))}</td><td class="money">{money(rounded_amount(total_cost))}</td><td class="money">{money(rounded_amount(total_margin))}</td><td colspan="3">반올림 차이 {money(rounding_difference)}원</td></tr>'''
 
 
 def unique_join(values: list[Any]) -> str:

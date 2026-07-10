@@ -406,7 +406,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
       <section class="page-panel" aria-labelledby="inventory-flow-title">
         <h2 id="inventory-flow-title">{escape(chart_spec['title'])}</h2>
         <p class="section-note">매입은 매입단가 기준 원가로 증가, 출고는 매출별 FIFO 배정원가로 감소시켰다.</p>
-        <p class="section-note">주 시작일 기준으로 묶었고, 막대는 주간 매입 증가·주간 출고 감소·주간 매출금액, 선은 주말 추정 재고금액이다.</p>
+        <p class="section-note">주 시작일 기준으로 묶었고, 막대는 주간 매입 증가·주간 출고 감소·주간 매출 공급가액, 선은 주말 추정 재고금액이다.</p>
         <p class="section-note">표시 단위: {escape(chart_spec.get('unit_label', '백만원'))}</p>
         <div class="legend">
           <span><i class="purchase-chip"></i>{escape(chart_spec["series"]["purchase_increase"]["label"])}</span>
