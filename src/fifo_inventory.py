@@ -35,6 +35,11 @@ def out_money(value: Decimal) -> int | float:
     return out_number(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def exact_money(value: Decimal) -> str:
+    """JSON-safe Decimal representation used for all cost-event aggregation."""
+    return format(value, "f")
+
+
 def iso_date(value: Any) -> date:
     if isinstance(value, date):
         return value
@@ -112,6 +117,7 @@ class ProductEngine:
         self.errors: list[dict[str, Any]] = []
         self.purchase_cost_events: list[dict[str, Any]] = []
         self.sales_cost_events: list[dict[str, Any]] = []
+        self.unconfirmed_quantity_events: list[dict[str, Any]] = []
         # These events are deliberately separate from sale COGS events.  A
         # later purchase can settle an older shortage on the purchase date,
         # which changes stock value even though it is not new-period COGS.
@@ -127,18 +133,19 @@ class ProductEngine:
 
     @staticmethod
     def _allocation(layer: Layer, quantity: Decimal, *, source: str) -> dict[str, Any]:
+        cost = quantity * layer.unit_cost
         return {
             "layer_id": layer.layer_id, "purchase_date": layer.purchase_date.isoformat(),
             "purchase_voucher": layer.voucher, "purchase_excel_row": layer.excel_row,
             "purchase_quantity": out_number(quantity), "unit_cost": out_number(layer.unit_cost),
-            "cost_amount": out_money(quantity * layer.unit_cost), "backfilled": layer.post_period_end,
+            "cost_amount": out_money(cost), "cost_amount_exact": exact_money(cost), "backfilled": layer.post_period_end,
             "allocation_source": source, "_layer": layer, "_quantity": quantity, "_unit_cost": layer.unit_cost,
         }
 
     def _cost_event(self, row: dict[str, Any], quantity: Decimal, cost: Decimal, event_type: str, **extra: Any) -> dict[str, Any]:
         return {"transaction_id": sale_key(row), "date": row.get("date"), "voucher": row.get("voucher"),
                 "excel_row": row.get("excel_row"), "product_id": self.product_id,
-                "quantity": out_number(quantity), "cost_amount": out_money(cost), "_cost_decimal": cost,
+                "quantity": out_number(quantity), "cost_amount": out_money(cost), "cost_amount_exact": exact_money(cost), "_cost_decimal": cost,
                 "event_type": event_type, **extra}
 
     def _resolve_unconfirmed(self, layer: Layer, source: str) -> None:
@@ -155,7 +162,18 @@ class ProductEngine:
             sale.unresolved_quantity -= quantity
             sale.event["cost_amount"] = out_money(dec(sale.event.get("_cost_decimal")) + quantity * layer.unit_cost)
             sale.event["_cost_decimal"] = dec(sale.event.get("_cost_decimal")) + quantity * layer.unit_cost
-            sale.event["unconfirmed_quantity"] = out_number(sale.unresolved_quantity)
+            sale.event["cost_amount_exact"] = exact_money(sale.event["_cost_decimal"])
+            # The original sale event remains an immutable accounting delta.
+            # Its current state is published separately for traceability.
+            sale.event["current_unconfirmed_quantity"] = out_number(sale.unresolved_quantity)
+            self.unconfirmed_quantity_events.append(self._cost_event(
+                layer_to_row(layer), quantity, ZERO, "shortage_backfill",
+                sale_date=iso_date(sale.row["date"]).isoformat(),
+                sale_transaction_id=sale_key(sale.row),
+                unconfirmed_quantity_delta=out_number(-quantity),
+                current_unconfirmed_quantity=out_number(sale.unresolved_quantity),
+                settlement_scope="current_period" if source == "period" else source,
+            ))
             if not layer.post_period_end:
                 sale_date = iso_date(sale.row["date"])
                 event_type = "shortage_backfill_consumption"
@@ -197,7 +215,8 @@ class ProductEngine:
             layer.remaining_quantity -= quantity
             remaining -= quantity
             cost += quantity * layer.unit_cost
-            allocations.append({"layer_id": layer.layer_id, "purchase_date": layer.purchase_date.isoformat(), "purchase_voucher": layer.voucher, "purchase_excel_row": layer.excel_row, "quantity": out_number(quantity), "unit_cost": out_number(layer.unit_cost), "amount": out_money(quantity * layer.unit_cost)})
+            amount = quantity * layer.unit_cost
+            allocations.append({"layer_id": layer.layer_id, "purchase_date": layer.purchase_date.isoformat(), "purchase_voucher": layer.voucher, "purchase_excel_row": layer.excel_row, "quantity": out_number(quantity), "unit_cost": out_number(layer.unit_cost), "amount": out_money(amount), "amount_exact": exact_money(amount)})
         self.purchase_cost_events.append(self._cost_event(row, -requested, -cost, "purchase_cancellation", allocations=allocations, post_period_end=post_only))
         if not post_only:
             self.inventory_cost_events.append(self._cost_event(row, -requested, -cost, "purchase_cancellation", allocations=allocations))
@@ -221,8 +240,9 @@ class ProductEngine:
                 )
         sale.unresolved_quantity = remaining
         cost = sum((value["_quantity"] * value["_unit_cost"] for value in sale.allocations), ZERO)
-        sale.event = self._cost_event(row, quantity, cost, "sale", unconfirmed_quantity=out_number(remaining), inventory_cost_amount=out_money(cost), cost_allocations=[dict(value) for value in sale.allocations])
+        sale.event = self._cost_event(row, quantity, cost, "sale", unconfirmed_quantity_delta=out_number(remaining), current_unconfirmed_quantity=out_number(remaining), inventory_cost_amount=out_money(cost), inventory_cost_amount_exact=exact_money(cost), cost_allocations=[dict(value) for value in sale.allocations])
         self.sales_cost_events.append(sale.event)
+        self.unconfirmed_quantity_events.append(sale.event)
         self.sales.append(sale)
         if remaining > ZERO:
             self.unconfirmed.append(sale)
@@ -251,6 +271,7 @@ class ProductEngine:
                 allocation["_quantity"] -= quantity
                 allocation["purchase_quantity"] = out_number(allocation["_quantity"])
                 allocation["cost_amount"] = out_money(allocation["_quantity"] * allocation["_unit_cost"])
+                allocation["cost_amount_exact"] = exact_money(allocation["_quantity"] * allocation["_unit_cost"])
                 allocation["_layer"].remaining_quantity += quantity
                 amount = quantity * allocation["_unit_cost"]
                 restored_cost += amount
@@ -260,13 +281,14 @@ class ProductEngine:
                         self._cost_event(row, quantity, amount, "sale_cancellation_restore", layer_id=allocation["layer_id"], original_sale_id=sale_key(sale.row))
                     )
                 left -= quantity
-                restored.append({"layer_id": allocation["layer_id"], "purchase_date": allocation["purchase_date"], "purchase_voucher": allocation["purchase_voucher"], "purchase_excel_row": allocation["purchase_excel_row"], "quantity": out_number(quantity), "unit_cost": allocation["unit_cost"], "amount": out_money(amount)})
+                restored.append({"layer_id": allocation["layer_id"], "purchase_date": allocation["purchase_date"], "purchase_voucher": allocation["purchase_voucher"], "purchase_excel_row": allocation["purchase_excel_row"], "quantity": out_number(quantity), "unit_cost": allocation["unit_cost"], "amount": out_money(amount), "amount_exact": exact_money(amount)})
             sale.active_quantity -= cancel
             sale.canceled_quantity += cancel
             remaining -= cancel
             details.append({"sale_id": sale_key(sale.row), "quantity": out_number(cancel), "unconfirmed_quantity": out_number(unresolved), "restored_allocations": restored})
-        event = self._cost_event(row, -requested, -restored_cost, "sale_cancellation", unconfirmed_quantity=out_number(-unconfirmed_cancel), inventory_cost_amount=out_money(restored_inventory_cost), restoration_details=details)
+        event = self._cost_event(row, -requested, -restored_cost, "sale_cancellation", unconfirmed_quantity_delta=out_number(-unconfirmed_cancel), current_unconfirmed_quantity=out_number(sum((sale.unresolved_quantity for sale in self.sales), ZERO)), inventory_cost_amount=out_money(restored_inventory_cost), inventory_cost_amount_exact=exact_money(restored_inventory_cost), restoration_details=details)
         self.sales_cost_events.append(event)
+        self.unconfirmed_quantity_events.append(event)
         self.cancellations.append({"type": "sales_cancellation", "product_id": self.product_id, "date": row.get("date"), "voucher": row.get("voucher"), "excel_row": row.get("excel_row"), "requested_quantity": out_number(requested), "sales": details})
 
     def process(self, row: dict[str, Any], kind: str, *, post: bool = False, source: str = "period") -> None:
@@ -284,7 +306,7 @@ class ProductEngine:
             self.cancel_sale(row)
 
     def _error(self, code: str, row: dict[str, Any], **details: Any) -> None:
-        self.errors.append({"code": code, "product_id": self.product_id, "date": row.get("date"), "voucher": row.get("voucher"), "excel_row": row.get("excel_row"), **details})
+        self.errors.append({"code": code, "source": "purchase" if "purchase" in code else "sales", "product_id": self.product_id, "date": row.get("date"), "voucher": row.get("voucher"), "excel_row": row.get("excel_row"), "affects_quantity": True, "affects_fifo_cost": True, "affects_revenue": True, "affects_vat": True, "affects_inventory_reconciliation": True, **details})
 
 
 def _clean(value: dict[str, Any]) -> dict[str, Any]:
@@ -306,17 +328,27 @@ def _sale_output(sale: SaleState, start: date, end: date) -> dict[str, Any]:
         output = _clean(value)
         output["purchase_quantity"] = out_number(quantity)
         output["cost_amount"] = out_money(quantity * value["_unit_cost"])
+        output["cost_amount_exact"] = exact_money(quantity * value["_unit_cost"])
         allocations.append(output)
         cost += quantity * value["_unit_cost"]
         if value["backfilled"]:
             backfill_qty += quantity
             backfill_amount += quantity * value["_unit_cost"]
     sale_date = iso_date(sale.row["date"])
-    return {"sale_id": sale_key(sale.row), "product_id": sale.product_id, "date": sale.row.get("date"), "voucher": sale.row.get("voucher"), "excel_row": sale.row.get("excel_row"), "company": sale.row.get("company"), "item_name": sale.row.get("item_name"), "specification": sale.row.get("specification"), "sale_quantity": out_number(sale.original_quantity), "effective_quantity": out_number(sale.active_quantity), "canceled_quantity": out_number(sale.canceled_quantity), "allocations": allocations, "fifo_cost_amount": out_money(cost), "unconfirmed_quantity": out_number(sale.unresolved_quantity), "backfilled_quantity": out_number(backfill_qty), "backfilled_amount": out_money(backfill_amount), "cost_status": "unconfirmed" if sale.unresolved_quantity > ZERO else ("backfilled" if backfill_qty > ZERO else "confirmed"), "in_analysis_period": start <= sale_date <= end}
+    return {"sale_id": sale_key(sale.row), "product_id": sale.product_id, "date": sale.row.get("date"), "voucher": sale.row.get("voucher"), "excel_row": sale.row.get("excel_row"), "company": sale.row.get("company"), "item_name": sale.row.get("item_name"), "specification": sale.row.get("specification"), "sale_quantity": out_number(sale.original_quantity), "effective_quantity": out_number(sale.active_quantity), "canceled_quantity": out_number(sale.canceled_quantity), "allocations": allocations, "fifo_cost_amount": out_money(cost), "fifo_cost_amount_exact": exact_money(cost), "unconfirmed_quantity": out_number(sale.unresolved_quantity), "backfilled_quantity": out_number(backfill_qty), "backfilled_amount": out_money(backfill_amount), "backfilled_amount_exact": exact_money(backfill_amount), "cost_status": "unconfirmed" if sale.unresolved_quantity > ZERO else ("backfilled" if backfill_qty > ZERO else "confirmed"), "in_analysis_period": start <= sale_date <= end}
 
 
 def _record_error(source: str, row: dict[str, Any], code: str, **details: Any) -> dict[str, Any]:
-    return {"code": code, "source": source, "product_id": row.get("product_id"), "date": row.get("date"), "voucher": row.get("voucher"), "excel_row": row.get("excel_row"), **details}
+    scopes = details.pop("affects", None)
+    if scopes is None:
+        scopes = {
+            "affects_quantity": source in {"purchase", "sales"},
+            "affects_fifo_cost": source in {"purchase", "sales"},
+            "affects_revenue": source == "sales",
+            "affects_vat": source in {"purchase", "sales"},
+            "affects_inventory_reconciliation": source in {"purchase", "sales", "inventory"},
+        }
+    return {"code": code, "source": source, "product_id": row.get("product_id"), "date": row.get("date"), "voucher": row.get("voucher"), "excel_row": row.get("excel_row"), **scopes, **details}
 
 
 def _amount_validation_error(source: str, row: dict[str, Any]) -> dict[str, Any] | None:
@@ -325,17 +357,19 @@ def _amount_validation_error(source: str, row: dict[str, Any]) -> dict[str, Any]
     if missing:
         return _record_error(
             source, row, "amount_components_missing", missing_fields=missing,
+            affects={"affects_quantity": False, "affects_fifo_cost": False, "affects_revenue": source == "sales", "affects_vat": True, "affects_inventory_reconciliation": False},
             supply_amount=row.get("supply_amount"), vat=row.get("vat"), total_amount=row.get("total_amount"),
         )
     try:
         supply_amount, vat, total_amount = (dec(row[field]) for field in fields)
     except ValueError as exc:
-        return _record_error(source, row, "amount_components_invalid", reason=str(exc), **{field: row.get(field) for field in fields})
+        return _record_error(source, row, "amount_components_invalid", reason=str(exc), affects={"affects_quantity": False, "affects_fifo_cost": False, "affects_revenue": source == "sales", "affects_vat": True, "affects_inventory_reconciliation": False}, **{field: row.get(field) for field in fields})
     calculated = supply_amount + vat
     if calculated != total_amount:
         return _record_error(
             source, row, "amount_components_mismatch", supply_amount=out_number(supply_amount), vat=out_number(vat),
             total_amount=out_number(total_amount), calculated_amount=out_number(calculated), difference=out_number(calculated - total_amount),
+            affects={"affects_quantity": False, "affects_fifo_cost": False, "affects_revenue": source == "sales", "affects_vat": True, "affects_inventory_reconciliation": False},
         )
     return None
 
@@ -351,6 +385,7 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
     purchases, sales, inventory = list(purchase_records), list(sales_records), list(inventory_records)
     errors: list[dict[str, Any]] = []
     amount_validation_errors: list[dict[str, Any]] = []
+    valid_amount_keys: set[tuple[str, Any, Any, Any]] = set()
     events, product_ids, ledger_ids = [], set(), set()
     names: dict[Any, set[str]] = defaultdict(set); specs: dict[Any, set[str]] = defaultdict(set)
     for row, kind in [(r, "purchase") for r in purchases] + [(r, "sales") for r in sales]:
@@ -365,6 +400,8 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
         amount_error = _amount_validation_error(kind, row)
         if amount_error:
             amount_validation_errors.append(amount_error)
+        else:
+            valid_amount_keys.add((kind, row.get("date"), row.get("voucher"), row.get("excel_row")))
         product_ids.add(product_id); ledger_ids.add(product_id); events.append((row, kind))
         if row.get("item_name"): names[product_id].add(str(row["item_name"]))
         if row.get("specification"): specs[product_id].add(str(row["specification"]))
@@ -376,6 +413,8 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
         if row.get("item_name"): names[product_id].add(str(row["item_name"]))
         if row.get("specification"): specs[product_id].add(str(row["specification"]))
     events.sort(key=lambda pair: event_sort_key(*pair))
+    def has_valid_amount(row: dict[str, Any], kind: str) -> bool:
+        return (kind, row.get("date"), row.get("voucher"), row.get("excel_row")) in valid_amount_keys
     engines = {product_id: ProductEngine(product_id) for product_id in product_ids}
     pre = [(r, k) for r, k in events if iso_date(r["date"]) < start]
     period = [(r, k) for r, k in events if start <= iso_date(r["date"]) <= end]
@@ -414,31 +453,40 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
         backfilled_amt = sum((dec(s["backfilled_amount"]) for s in period_outputs), ZERO)
         # Cost events make sale cancellations signed, so a +10 shortage and a
         # -4 cancellation reports the correct net shortage of six.
-        unresolved = sum((dec(event.get("unconfirmed_quantity")) for event in s_events), ZERO)
-        product_amount_errors = [error for error in amount_validation_errors if error.get("product_id") == product_id and start <= iso_date(error["date"]) <= end]
-        status = "error" if future.errors or product_amount_errors else ("unconfirmed" if unresolved > ZERO else ("backfilled" if backfilled_qty > ZERO else "confirmed"))
+        unconfirmed_events = [
+            event for event in future.unconfirmed_quantity_events
+            if (event.get("event_type") in {"sale", "sale_cancellation"} and start <= iso_date(event["date"]) <= end)
+            or (event.get("event_type") == "shortage_backfill" and event.get("sale_date") and start <= iso_date(event["sale_date"]) <= end)
+        ]
+        unresolved = sum((dec(event.get("unconfirmed_quantity_delta")) for event in unconfirmed_events), ZERO)
+        if unresolved < ZERO:
+            raise AssertionError(f"unconfirmed quantity became negative for product {product_id!r}")
+        product_amount_errors = [error for error in amount_validation_errors if error.get("product_id") == product_id and error.get("date") and start <= iso_date(error["date"]) <= end]
+        status = "error" if future.errors or any(error["affects_fifo_cost"] or error["affects_revenue"] for error in product_amount_errors) else ("unconfirmed" if unresolved > ZERO else ("backfilled" if backfilled_qty > ZERO else "confirmed"))
         inv = sheet_qty.get(product_id); book = inventory_qty.get(product_id, ZERO); difference = inv-book if product_id in sheet_qty else None
         recon = "inventory_only" if product_id not in ledger_ids else ("ledger_only" if inv is None else ("inventory_negative_stock" if inv < ZERO else ("match" if difference == ZERO else ("inventory_more" if difference > ZERO else "ledger_more"))))
         layer_output = [{"layer_id":l.layer_id,"product_id":l.product_id,"purchase_date":l.purchase_date.isoformat(),"voucher":l.voucher,"excel_row":l.excel_row,"original_quantity":out_number(l.original_quantity),"remaining_quantity":out_number(l.remaining_quantity),"unit_cost":out_number(l.unit_cost),"post_period_end":False,"remaining_amount":out_money(l.remaining_quantity*l.unit_cost)} for l in end_layers]
         prior_settlement_events = [event for event in snapshot.inventory_cost_events if event["event_type"] == "shortage_backfill_consumption" and iso_date(event["date"]) >= start and event.get("sale_date") and iso_date(event["sale_date"]) < start]
         prior_settlement = -sum((dec(event["_cost_decimal"]) for event in prior_settlement_events), ZERO)
         prior_settlement_quantity = -sum((dec(event["quantity"]) for event in prior_settlement_events), ZERO)
-        period_sales_supply = _sum_rows(sales_period, "supply_amount")
-        period_sales_vat = _sum_rows(sales_period, "vat")
-        period_sales_total = _sum_rows(sales_period, "total_amount")
-        period_purchase_supply = _sum_rows(purchases_period, "supply_amount")
-        period_purchase_vat = _sum_rows(purchases_period, "vat")
-        period_purchase_total = _sum_rows(purchases_period, "total_amount")
+        valid_sales_period = [row for row in sales_period if has_valid_amount(row, "sales")]
+        valid_purchases_period = [row for row in purchases_period if has_valid_amount(row, "purchase")]
+        period_sales_supply = _sum_rows(valid_sales_period, "supply_amount")
+        period_sales_vat = _sum_rows(valid_sales_period, "vat")
+        period_sales_total = _sum_rows(valid_sales_period, "total_amount")
+        period_purchase_supply = _sum_rows(valid_purchases_period, "supply_amount")
+        period_purchase_vat = _sum_rows(valid_purchases_period, "vat")
+        period_purchase_total = _sum_rows(valid_purchases_period, "total_amount")
         period_unconfirmed_supply = sum((
             dec(sale.row.get("supply_amount")) * sale.unresolved_quantity / sale.original_quantity
             for sale in future.sales
-            if sale.original_quantity and start <= iso_date(sale.row["date"]) <= end
+            if sale.original_quantity and start <= iso_date(sale.row["date"]) <= end and has_valid_amount(sale.row, "sales")
         ), ZERO)
         fifo_sales_cost = sum((dec(e["_cost_decimal"]) for e in s_events), ZERO)
         gross_profit = period_sales_supply - fifo_sales_cost
         row = {"product_id":product_id,"item_name":sorted(names[product_id])[0] if names[product_id] else None,"item_names":sorted(names[product_id]),"specification":sorted(specs[product_id])[0] if specs[product_id] else None,"specifications":sorted(specs[product_id]),"opening_stock_quantity":out_number(sum((l.remaining_quantity for l in opened_layers),ZERO)),"opening_stock_amount":out_money(sum((l.remaining_quantity*l.unit_cost for l in opened_layers),ZERO)),"period_purchase_quantity":out_number(sum((dec(r["quantity"]) for r in purchases_period),ZERO)),"period_purchase_cost_amount":out_money(sum((dec(e["_cost_decimal"]) for e in p_events),ZERO)),"period_sales_quantity":out_number(sum((dec(r["quantity"]) for r in sales_period),ZERO)),"period_sales_supply_amount":out_money(period_sales_supply),"period_sales_vat_amount":out_money(period_sales_vat),"period_sales_total_amount":out_money(period_sales_total),"period_sales_amount":out_money(period_sales_supply),"fifo_sales_cost_amount":out_money(fifo_sales_cost),"ending_signed_stock_quantity":out_number(signed),"ending_normal_stock_quantity":out_number(normal_qty),"ending_fifo_inventory_amount":out_money(normal_amt),"ending_negative_stock_quantity":out_number(max(-signed,ZERO)),"post_period_backfill_quantity":out_number(backfilled_qty),"post_period_backfill_amount":out_money(backfilled_amt),"prior_period_shortage_settlement_quantity":out_number(prior_settlement_quantity),"prior_period_shortage_settlement_amount":out_money(prior_settlement),"backfilled_quantity":out_number(backfilled_qty),"backfilled_amount":out_money(backfilled_amt),"unconfirmed_quantity":out_number(unresolved),"unconfirmed_sales_supply_amount":out_money(period_unconfirmed_supply),"cost_status":status,"inventory_book_quantity":out_number(book),"inventory_sheet_quantity":out_number(inv) if inv is not None else None,"inventory_quantity_difference":out_number(difference) if difference is not None else None,"quantity_reconciliation_status":recon,"remaining_cost_layers":layer_output,"purchase_quantity":out_number(sum((dec(r["quantity"]) for r in purchases_period),ZERO)),"sales_quantity":out_number(sum((dec(r["quantity"]) for r in sales_period),ZERO)),"calculated_stock_quantity":out_number(book),"inventory_quantity":out_number(inv) if inv is not None else None,"quantity_difference":out_number(difference) if difference is not None else None,"period_purchase_supply_amount":out_money(period_purchase_supply),"period_purchase_vat_amount":out_money(period_purchase_vat),"period_purchase_total_amount":out_money(period_purchase_total),"purchase_amount":out_money(period_purchase_supply),"sales_amount":out_money(period_sales_supply)}
         row["gross_profit"] = out_money(gross_profit)
-        row["gross_profit_rate"] = out_number(gross_profit / period_sales_supply * Decimal("100")) if period_sales_supply else None
+        row["gross_profit_rate"] = out_number(gross_profit / period_sales_supply * Decimal("100")) if period_sales_supply and status == "confirmed" else None
         rows.append(row)
         for sale in period_outputs:
             if sale["unconfirmed_quantity"]: unconfirmed.append(sale)
@@ -453,19 +501,21 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
     ending_amount = sum((sum((layer.remaining_quantity * layer.unit_cost for layer in engine.layers if layer.remaining_quantity > ZERO and not layer.post_period_end), ZERO) for engine in ending.values()), ZERO)
     period_purchase_cost = sum((event["_cost_decimal"] for engine in ending.values() for event in engine.purchase_cost_events if start <= iso_date(event["date"]) <= end), ZERO)
     fifo_sales_cost = sum((event["_cost_decimal"] for engine in continuation.values() for event in engine.sales_cost_events if start <= iso_date(event["date"]) <= end), ZERO)
-    period_sales_supply = _sum_rows(period_sales, "supply_amount")
-    period_sales_vat = _sum_rows(period_sales, "vat")
-    period_sales_total = _sum_rows(period_sales, "total_amount")
-    period_purchase_supply = _sum_rows(period_purchases, "supply_amount")
-    period_purchase_vat = _sum_rows(period_purchases, "vat")
-    period_purchase_total = _sum_rows(period_purchases, "total_amount")
+    valid_period_sales = [row for row in period_sales if has_valid_amount(row, "sales")]
+    valid_period_purchases = [row for row in period_purchases if has_valid_amount(row, "purchase")]
+    period_sales_supply = _sum_rows(valid_period_sales, "supply_amount")
+    period_sales_vat = _sum_rows(valid_period_sales, "vat")
+    period_sales_total = _sum_rows(valid_period_sales, "total_amount")
+    period_purchase_supply = _sum_rows(valid_period_purchases, "supply_amount")
+    period_purchase_vat = _sum_rows(valid_period_purchases, "vat")
+    period_purchase_total = _sum_rows(valid_period_purchases, "total_amount")
     gross_profit = period_sales_supply - fifo_sales_cost
     vat_settlement = period_sales_vat - period_purchase_vat
     unconfirmed_quantity = sum((dec(row["unconfirmed_quantity"]) for row in rows), ZERO)
     unconfirmed_sales_supply = sum((
         dec(sale.row.get("supply_amount")) * sale.unresolved_quantity / sale.original_quantity
         for engine in continuation.values() for sale in engine.sales
-        if sale.original_quantity and start <= iso_date(sale.row["date"]) <= end
+        if sale.original_quantity and start <= iso_date(sale.row["date"]) <= end and has_valid_amount(sale.row, "sales")
     ), ZERO)
     post_period_backfill = sum((
         allocation["_quantity"] * allocation["_unit_cost"]
@@ -481,17 +531,26 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
     prior_settlement = -sum((event["_cost_decimal"] for event in prior_settlement_events), ZERO)
     prior_settlement_quantity = -sum((dec(event["quantity"]) for event in prior_settlement_events), ZERO)
     engine_errors=[event for engine in continuation.values() for event in engine.errors]
-    current_amount_errors = [error for error in amount_validation_errors if start <= iso_date(error["date"]) <= end]
-    gross_profit_status = "error" if engine_errors or current_amount_errors else ("provisional" if unconfirmed_quantity > ZERO else "confirmed")
+    def error_can_affect_period(error: dict[str, Any]) -> bool:
+        value = error.get("date")
+        if not value:
+            return error.get("source") != "inventory"
+        try:
+            return start <= iso_date(value) <= end or (error.get("source") == "purchase" and iso_date(value) > end)
+        except ValueError:
+            return error.get("source") != "inventory"
+    calculation_errors = [error for error in [*errors, *amount_validation_errors, *engine_errors] if error_can_affect_period(error)]
+    gross_profit_status = "error" if any(error.get("affects_fifo_cost") or error.get("affects_revenue") for error in calculation_errors) else ("provisional" if unconfirmed_quantity > ZERO else "confirmed")
+    vat_errors = [error for error in calculation_errors if error.get("affects_vat")]
     summary={
         "opening_stock_amount":out_money(opening_amount), "period_purchase_cost_amount":out_money(period_purchase_cost),
         "period_sales_supply_amount":out_money(period_sales_supply), "period_sales_vat_amount":out_money(period_sales_vat), "period_sales_total_amount":out_money(period_sales_total),
         "period_purchase_supply_amount":out_money(period_purchase_supply), "period_purchase_vat_amount":out_money(period_purchase_vat), "period_purchase_total_amount":out_money(period_purchase_total),
         "period_sales_amount":out_money(period_sales_supply), "purchase_amount":out_money(period_purchase_supply), "sales_amount":out_money(period_sales_supply),
         "fifo_sales_cost_amount":out_money(fifo_sales_cost), "gross_profit":out_money(gross_profit),
-        "gross_profit_rate":out_number(gross_profit / period_sales_supply * Decimal("100")) if period_sales_supply else None,
+        "gross_profit_rate":out_number(gross_profit / period_sales_supply * Decimal("100")) if period_sales_supply and gross_profit_status == "confirmed" else None,
         "gross_profit_status":gross_profit_status, "unconfirmed_sales_supply_amount":out_money(unconfirmed_sales_supply),
-        "vat_settlement_amount":out_money(vat_settlement), "vat_settlement_status":"validation_error" if current_amount_errors else ("payable" if vat_settlement > ZERO else ("refundable" if vat_settlement < ZERO else "zero")),
+        "vat_settlement_amount":out_money(vat_settlement), "vat_settlement_status":"validation_error" if vat_errors else ("payable" if vat_settlement > ZERO else ("refundable" if vat_settlement < ZERO else "zero")),
         "post_vat_reference_amount":out_money(gross_profit - vat_settlement),
         "ending_fifo_inventory_amount":out_money(ending_amount), "inventory_amount_at_fifo":out_money(ending_amount),
         "post_period_backfill_amount":out_money(post_period_backfill), "backfilled_amount":out_money(post_period_backfill),
@@ -512,6 +571,6 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
     for product_id in sorted(product_ids,key=str):
         if len(names[product_id])>1: warnings.append({"code":"item_name_mismatch","product_id":product_id,"values":sorted(names[product_id])})
         if len(specs[product_id])>1: warnings.append({"code":"specification_mismatch","product_id":product_id,"values":sorted(specs[product_id])})
-    public_events=[_clean(e) for engine in continuation.values() for e in engine.sales_cost_events]; public_purchases=[_clean(e) for engine in continuation.values() for e in engine.purchase_cost_events]; public_inventory_events=[_clean(e) for engine in ending.values() for e in engine.inventory_cost_events]
+    public_events=[_clean(e) for engine in continuation.values() for e in engine.sales_cost_events]; public_unconfirmed_events=[_clean(e) for engine in continuation.values() for e in engine.unconfirmed_quantity_events]; public_purchases=[_clean(e) for engine in continuation.values() for e in engine.purchase_cost_events]; public_inventory_events=[_clean(e) for engine in ending.values() for e in engine.inventory_cost_events]
     all_dates=[iso_date(r["date"]) for r,k in events]; purchase_dates=[iso_date(r["date"]) for r,k in events if k=="purchase"]
-    return {"metadata":{"period_start":start.isoformat(),"period_end":end.isoformat(),"inventory_date":stock_date.isoformat(),"analysis_start_date":start.isoformat(),"analysis_end_date":end.isoformat(),"inventory_reference_date":stock_date.isoformat(),"input_data_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_data_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_data_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"input_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"backfill_last_purchase_date":max((a["purchase_date"] for a in backfills),default=None),"costing_method":"FIFO","inventory_unit_costs_used":False,"inventory_price_fields_ignored":["average_cost","latest_purchase_price","sales_price"]},"summary":summary,"rows":rows,"sales_allocations":all_sales,"sales_cost_events":public_events,"purchase_cost_events":public_purchases,"inventory_cost_events":public_inventory_events,"unconfirmed_shipments":unconfirmed,"backfill_allocations":backfills,"cancellation_events":[event for engine in continuation.values() for event in engine.cancellations],"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":len(amount_validation_errors),"errors":errors+amount_validation_errors+engine_errors,"warnings":warnings,"calculated_negative_stock":[row for row in rows if dec(row["ending_signed_stock_quantity"])<ZERO],"inventory_negative_stock":[row for row in rows if row["quantity_reconciliation_status"]=="inventory_negative_stock"],"quantity_mismatches":[row for row in rows if row["quantity_reconciliation_status"]!="match"]}
+    return {"metadata":{"period_start":start.isoformat(),"period_end":end.isoformat(),"inventory_date":stock_date.isoformat(),"analysis_start_date":start.isoformat(),"analysis_end_date":end.isoformat(),"inventory_reference_date":stock_date.isoformat(),"input_data_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_data_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_data_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"input_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"backfill_last_purchase_date":max((a["purchase_date"] for a in backfills),default=None),"costing_method":"FIFO","inventory_unit_costs_used":False,"inventory_price_fields_ignored":["average_cost","latest_purchase_price","sales_price"]},"summary":summary,"rows":rows,"sales_allocations":all_sales,"sales_cost_events":public_events,"unconfirmed_quantity_events":public_unconfirmed_events,"purchase_cost_events":public_purchases,"inventory_cost_events":public_inventory_events,"unconfirmed_shipments":unconfirmed,"backfill_allocations":backfills,"cancellation_events":[event for engine in continuation.values() for event in engine.cancellations],"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":len(amount_validation_errors),"errors":errors+amount_validation_errors+engine_errors,"warnings":warnings,"calculated_negative_stock":[row for row in rows if dec(row["ending_signed_stock_quantity"])<ZERO],"inventory_negative_stock":[row for row in rows if row["quantity_reconciliation_status"]=="inventory_negative_stock"],"quantity_mismatches":[row for row in rows if row["quantity_reconciliation_status"]!="match"]}

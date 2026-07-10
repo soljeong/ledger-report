@@ -260,7 +260,7 @@ class InventoryAnalysisTests(unittest.TestCase):
         sell = sale("2026-01-02", 1, amount=110)
         sell.update(supply_amount=100, vat=10, total_amount=111)
         result = analyze([buy], [sell], [inventory(0)])
-        self.assertEqual(result["summary"]["vat_settlement_amount"], -10)
+        self.assertEqual(result["summary"]["vat_settlement_amount"], -20)
         self.assertEqual(result["summary"]["vat_settlement_status"], "validation_error")
         self.assertEqual(result["summary"]["amount_validation_error_count"], 1)
         self.assertEqual(result["amount_validation_errors"][0]["code"], "amount_components_mismatch")
@@ -295,6 +295,48 @@ class InventoryAnalysisTests(unittest.TestCase):
         )
         self.assertEqual(result["summary"]["unconfirmed_quantity"], 6)
         self.assertEqual(result["summary"]["gross_profit_status"], "provisional")
+
+    def test_unconfirmed_deltas_cancel_then_backfill_without_negative_quantity(self):
+        result = analyze(
+            [purchase("2026-01-03", 6, 100)],
+            [sale("2026-01-01", 10, amount=1000), sale("2026-01-02", -4, voucher=2, excel_row=2, amount=-400)],
+            [inventory(0)], end="2026-01-02", stock_date="2026-01-03",
+        )
+        deltas = result["unconfirmed_quantity_events"]
+        self.assertEqual(sum(event.get("unconfirmed_quantity_delta", 0) for event in deltas), 0)
+        self.assertEqual(result["summary"]["unconfirmed_quantity"], 0)
+        self.assertTrue(all(row["unconfirmed_quantity"] >= 0 for row in result["rows"]))
+
+    def test_unconfirmed_deltas_backfill_then_cancel_without_negative_quantity(self):
+        result = analyze(
+            [purchase("2026-01-02", 6, 100)],
+            [sale("2026-01-01", 10, amount=1000), sale("2026-01-03", -4, voucher=2, excel_row=2, amount=-400)],
+            [inventory(0)], end="2026-01-03", stock_date="2026-01-03",
+        )
+        self.assertEqual(sum(event.get("unconfirmed_quantity_delta", 0) for event in result["unconfirmed_quantity_events"]), 0)
+        self.assertEqual(result["summary"]["unconfirmed_quantity"], 0)
+
+    def test_missing_supply_amount_is_excluded_not_replaced_by_total(self):
+        record = sale("2026-01-02", 1, amount=110)
+        record.pop("supply_amount")
+        result = analyze([purchase("2026-01-01", 1, 100)], [record], [inventory(0)])
+        self.assertEqual(result["summary"]["period_sales_supply_amount"], 0)
+        self.assertEqual(result["summary"]["gross_profit_status"], "error")
+        self.assertEqual(result["summary"]["vat_settlement_status"], "validation_error")
+
+    def test_exact_cost_events_round_only_after_aggregation(self):
+        result = analyze(
+            [purchase("2026-01-01", 2, "0.49")],
+            [sale("2026-01-02", 1, amount=10), sale("2026-01-03", 1, voucher=2, excel_row=2, amount=10)],
+            [inventory(0)],
+        )
+        self.assertEqual(result["summary"]["fifo_sales_cost_amount"], 1)
+        self.assertEqual([event["cost_amount_exact"] for event in result["sales_cost_events"]], ["0.49", "0.49"])
+
+    def test_missing_product_sale_propagates_profit_and_vat_error(self):
+        result = analyze([purchase("2026-01-01", 1, 100)], [sale("2026-01-02", 1, product_id=None, amount=100)], [inventory(1)])
+        self.assertEqual(result["summary"]["gross_profit_status"], "error")
+        self.assertEqual(result["summary"]["vat_settlement_status"], "validation_error")
 
 
 if __name__ == "__main__":

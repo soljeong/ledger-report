@@ -30,13 +30,13 @@ def weekly_purchase_sales_figure(df: pd.DataFrame, spec: dict[str, Any]) -> go.F
         go.Bar(
             x=df["label"] if "label" in df else [],
             y=df["sales_amount"] if "sales_amount" in df else [],
-            name=_series_label(spec, "sales_amount", "매출금액"),
+            name=_series_label(spec, "sales_amount", "매출 공급가액"),
             marker_color=_series_color(spec, "sales_amount", "#b54708"),
             opacity=0.55,
             text=margin_text,
             textposition="outside",
             cliponaxis=False,
-            hovertemplate=_money_hover(_series_label(spec, "sales_amount", "매출금액"), unit_label),
+            hovertemplate=_money_hover(_series_label(spec, "sales_amount", "매출 공급가액"), unit_label),
         )
     )
     figure.add_trace(
@@ -90,7 +90,7 @@ def weekly_inventory_flow_figure(df: pd.DataFrame, spec: dict[str, Any]) -> go.F
     ).fillna(0) / divisor
     purchase_label = _series_label(spec, "purchase_increase", "주간 매입 증가")
     outbound_label = _series_label(spec, "outbound_cost_estimate", "주간 출고 감소(추정원가)")
-    sales_label = _series_label(spec, "sales_amount", "주간 매출금액")
+    sales_label = _series_label(spec, "sales_amount", "주간 매출 공급가액")
     inventory_label = _series_label(spec, "estimated_inventory_amount", "주말 추정 재고금액")
 
     figure = go.Figure()
@@ -183,13 +183,14 @@ def principal_margin_figure(df: pd.DataFrame, spec: dict[str, Any]) -> go.Figure
             y=principals,
             x=df["sales_amount"] if "sales_amount" in df else [],
             orientation="h",
-            name=_series_label(spec, "sales_amount", "매출금액"),
+            name=_series_label(spec, "sales_amount", "매출 공급가액"),
             marker_color=_series_color(spec, "sales_amount", "#b54708"),
             opacity=0.55,
             text=margin_text,
             textposition="outside",
             cliponaxis=False,
-            hovertemplate=f"%{{y}}<br>{_series_label(spec, 'sales_amount', '매출금액')}: %{{x:,}} {unit_label}<extra></extra>",
+            customdata=df.get("margin_status", pd.Series("confirmed", index=df.index)),
+            hovertemplate=f"%{{y}}<br>{_series_label(spec, 'sales_amount', '매출 공급가액')}: %{{x:,}} {unit_label}<br>마진 상태: %{{customdata}}<extra></extra>",
         )
     )
     figure.add_trace(
