@@ -205,17 +205,19 @@ def render_problem_item_rows(payload: dict[str, Any]) -> str:
         row for row in payload.get("rows", [])
         if row.get("cost_status") in {"backfilled", "unconfirmed", "error"}
         or row.get("amount_validation_status") != "valid"
+        or row.get("quantity_reconciliation_validation_status", "valid") != "valid"
         or row.get("quantity_reconciliation_status") != "match"
         or row.get("product_id") in error_codes
     ]
     if not problems:
-        return '<tr><td colspan="13">없음</td></tr>'
+        return '<tr><td colspan="14">없음</td></tr>'
     return "\n".join(
         "<tr>"
         f"<td>{escape(str(row.get('product_id') if row.get('product_id') is not None else '-'))}</td>"
         f"<td>{escape(str(row.get('item_name') or '-'))}</td>"
         f"<td><code>{escape(str(row.get('cost_status') or '-'))}</code></td>"
         f"<td><code>{escape(str(row.get('amount_validation_status') or '-'))}</code></td>"
+        f"<td><code>{escape(str(row.get('quantity_reconciliation_validation_status') or '-'))}</code></td>"
         f"<td class=\"money\">{_base.number(row.get('opening_unconfirmed_quantity') or 0)}</td>"
         f"<td class=\"money\">{_base.number(row.get('period_unconfirmed_quantity') or 0)}</td>"
         f"<td class=\"money\">{_base.number(row.get('all_unconfirmed_quantity', row.get('unconfirmed_quantity')) or 0)}</td>"
@@ -453,11 +455,11 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
           <h3 id="stock-reconciliation-title">재고 기준일 수량 대사</h3>
           <p class="section-note">장부상 계산수량과 재고 시트의 stock_quantity만 비교했다. 재고 시트 단가는 사용하지 않았다.</p>
           <ul>{reconciliation_rows}</ul>
-          <p class="section-note">불일치 품목 {_base.number(reconciliation.get('quantity_reconciliation_mismatch_count', 0))}개</p>
+          <p class="section-note">불일치 품목 {_base.number(reconciliation.get('quantity_reconciliation_mismatch_count', 0))}개 · 수량 계산 검증 오류 {_base.number(reconciliation.get('quantity_validation_error_count', 0))}건</p>
         </section>
         <section aria-labelledby="problem-items-title">
           <h3 id="problem-items-title">문제 품목 상세</h3>
-          <div class="table-scroll"><table><thead><tr><th>product_id</th><th>품명</th><th>FIFO 원가 상태</th><th>금액 구성 검증 상태</th><th>기초 미확정 출고</th><th>기간 미확정 출고</th><th>전체 미확정 수량</th><th>종료일 음수재고</th><th>기준일 장부수량</th><th>재고 시트 수량</th><th>수량 차이</th><th>수량 대사 상태</th><th>오류/경고</th></tr></thead><tbody>{problem_rows}</tbody></table></div>
+          <div class="table-scroll"><table><thead><tr><th>product_id</th><th>품명</th><th>FIFO 원가 상태</th><th>금액 구성 검증 상태</th><th>수량 계산 검증 상태</th><th>기초 미확정 출고</th><th>기간 미확정 출고</th><th>전체 미확정 수량</th><th>종료일 음수재고</th><th>기준일 장부수량</th><th>재고 시트 수량</th><th>수량 차이</th><th>수량 대사 상태</th><th>오류/경고</th></tr></thead><tbody>{problem_rows}</tbody></table></div>
         </section>
         <section aria-labelledby="transaction-errors-title">
           <h3 id="transaction-errors-title">거래 단위 오류 상세</h3>
