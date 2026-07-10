@@ -5,7 +5,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from generate_analysis_report_html import generate_report, load_report_spec, load_sources, render_report_html
+from generate_analysis_report_html import (
+    generate_report,
+    load_report_spec,
+    load_sources,
+    render_amount_balance_chart,
+    render_report_html,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -20,6 +26,11 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertIn("<title>매입/매출 재고 분석 보고서</title>", html)
         self.assertIn("요약", html)
         self.assertIn("금액 대사", html)
+        self.assertIn('id="amount-balance-chart"', html)
+        self.assertIn("밸런스 블록 차트", html)
+        self.assertIn("양쪽 합계 1,303,500원", html)
+        self.assertIn("매출 + 재고", html)
+        self.assertIn("매입 + 나머지", html)
         self.assertIn("주간 매입/매출 금액", html)
         self.assertIn("Plotly.newPlot", html)
         self.assertIn("plotly.js", html)
@@ -66,6 +77,12 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertNotIn("품목별 분석", html)
         self.assertNotIn("전표별 매출 요약", html)
 
+    def test_amount_balance_chart_uses_nonnegative_guard(self) -> None:
+        html = render_amount_balance_chart(2_000, 500, 500, -1_000)
+
+        self.assertNotIn('id="amount-balance-chart"', html)
+        self.assertIn("모두 0 이상", html)
+
     def test_report_spec_controls_chart_text_and_plotlyjs_mode(self) -> None:
         spec = load_report_spec(BASE_DIR / "report_spec.yaml")
         spec["plotly"]["include_plotlyjs"] = "cdn"
@@ -89,6 +106,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
             html = output_path.read_text(encoding="utf-8")
             self.assertIn("매입/매출 재고 분석 보고서", html)
             self.assertIn("금액 대사", html)
+            self.assertIn('id="amount-balance-chart"', html)
 
 
 if __name__ == "__main__":

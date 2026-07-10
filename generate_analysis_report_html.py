@@ -242,6 +242,103 @@ def render_weekly_chart(rows: list[dict[str, Any]]) -> str:
     """
 
 
+def render_amount_balance_chart(
+    purchase_amount: int | float,
+    sales_amount: int | float,
+    inventory_amount: int | float,
+    remainder_amount: int | float,
+) -> str:
+    """Render the amount reconciliation as two equal-height stacked SVG blocks."""
+    values = [purchase_amount, sales_amount, inventory_amount, remainder_amount]
+    if any(value < 0 for value in values):
+        return """
+          <div class="balance-chart-empty" role="note">
+            밸런스 블록 차트는 매입·매출·재고·나머지가 모두 0 이상일 때 표시한다.
+          </div>
+        """
+
+    total_amount = sales_amount + inventory_amount
+    if total_amount <= 0:
+        return """
+          <div class="balance-chart-empty" role="note">
+            밸런스 블록 차트를 표시할 금액이 없다.
+          </div>
+        """
+
+    chart_width = 960
+    chart_height = 520
+    plot_top = 118
+    plot_height = 286
+    baseline_y = plot_top + plot_height
+    left_x = 188
+    right_x = 602
+    block_width = 170
+
+    def height(value: int | float) -> float:
+        return (value / total_amount) * plot_height
+
+    inventory_height = height(inventory_amount)
+    sales_height = height(sales_amount)
+    purchase_height = height(purchase_amount)
+    remainder_height = height(remainder_amount)
+
+    inventory_y = baseline_y - inventory_height
+    sales_y = inventory_y - sales_height
+    purchase_y = baseline_y - purchase_height
+    remainder_y = purchase_y - remainder_height
+
+    def segment_label(x: float, y: float, segment_height: float, label: str, value: int | float) -> str:
+        center_y = y + segment_height / 2
+        return f"""
+          <text class="balance-segment-label" x="{x + block_width / 2:.1f}" y="{center_y - 8:.1f}" text-anchor="middle">{escape(label)}</text>
+          <text class="balance-segment-value" x="{x + block_width / 2:.1f}" y="{center_y + 15:.1f}" text-anchor="middle">{money(value)}원</text>
+        """
+
+    equation = (
+        f"매출 {money(sales_amount)} + 재고 {money(inventory_amount)} = "
+        f"매입 {money(purchase_amount)} + 나머지 {money(remainder_amount)} = {money(total_amount)}원"
+    )
+
+    return f"""
+      <div class="chart-wrap balance-chart-wrap" aria-label="금액 대사 밸런스 블록 차트">
+        <svg id="amount-balance-chart" viewBox="0 0 {chart_width} {chart_height}" role="img"
+             aria-labelledby="amount-balance-title amount-balance-desc">
+          <title id="amount-balance-title">밸런스 블록 차트: 매출과 재고의 합계, 매입과 나머지의 합계</title>
+          <desc id="amount-balance-desc">왼쪽은 재고금액 위에 매출금액을, 오른쪽은 매입금액 위에 나머지를 쌓아 양쪽 합계가 같은지 보여준다.</desc>
+          <defs>
+            <pattern id="balance-remainder-hatch" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(35)">
+              <rect width="10" height="10" fill="#fff7e8"></rect>
+              <line x1="0" y1="0" x2="0" y2="10" stroke="#c47a23" stroke-width="3"></line>
+            </pattern>
+          </defs>
+
+          <text class="balance-equation" x="480" y="36" text-anchor="middle">{escape(equation)}</text>
+          <text class="balance-note" x="480" y="64" text-anchor="middle">기초재고 0 가정 · 나머지 = 매출 + 현재재고금액 - 매입</text>
+
+          <line class="balance-equality-line" x1="{left_x}" y1="{plot_top}" x2="{right_x + block_width}" y2="{plot_top}"></line>
+          <text class="balance-total-label" x="480" y="{plot_top - 14}" text-anchor="middle">양쪽 합계 {money(total_amount)}원</text>
+
+          <rect class="balance-block balance-inventory" x="{left_x}" y="{inventory_y:.1f}" width="{block_width}" height="{inventory_height:.1f}" rx="3"></rect>
+          <rect class="balance-block balance-sales" x="{left_x}" y="{sales_y:.1f}" width="{block_width}" height="{sales_height:.1f}" rx="3"></rect>
+          {segment_label(left_x, inventory_y, inventory_height, '재고금액', inventory_amount)}
+          {segment_label(left_x, sales_y, sales_height, '매출', sales_amount)}
+
+          <rect class="balance-block balance-purchase" x="{right_x}" y="{purchase_y:.1f}" width="{block_width}" height="{purchase_height:.1f}" rx="3"></rect>
+          <rect class="balance-block balance-remainder" x="{right_x}" y="{remainder_y:.1f}" width="{block_width}" height="{remainder_height:.1f}" rx="3"></rect>
+          {segment_label(right_x, purchase_y, purchase_height, '매입', purchase_amount)}
+          {segment_label(right_x, remainder_y, remainder_height, '나머지', remainder_amount)}
+
+          <line class="balance-baseline" x1="{left_x - 28}" y1="{baseline_y}" x2="{left_x + block_width + 28}" y2="{baseline_y}"></line>
+          <line class="balance-baseline" x1="{right_x - 28}" y1="{baseline_y}" x2="{right_x + block_width + 28}" y2="{baseline_y}"></line>
+          <text class="balance-side-title" x="{left_x + block_width / 2}" y="452" text-anchor="middle">매출 + 재고</text>
+          <text class="balance-side-note" x="{left_x + block_width / 2}" y="478" text-anchor="middle">회수액과 남아 있는 자산</text>
+          <text class="balance-side-title" x="{right_x + block_width / 2}" y="452" text-anchor="middle">매입 + 나머지</text>
+          <text class="balance-side-note" x="{right_x + block_width / 2}" y="478" text-anchor="middle">투입액과 대사 차액</text>
+        </svg>
+      </div>
+    """
+
+
 def render_weekly_table_rows(rows: list[dict[str, Any]]) -> str:
     return "\n".join(
         f"""
@@ -518,6 +615,12 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     sales_amount = reconciliation["sales_amount"]
     inventory_average = reconciliation["inventory_amount_at_average_cost"]
     remainder_average = reconciliation["remainder_at_average_cost"]
+    amount_balance_chart = render_amount_balance_chart(
+        purchase_amount,
+        sales_amount,
+        inventory_average,
+        remainder_average,
+    )
     weekly_amounts = weekly_purchase_sales_amounts(sources["purchase"]["records"], sources["sales"]["records"])
     include_plotlyjs = include_plotlyjs_option(spec.get("plotly", {}).get("include_plotlyjs", "inline"))
     weekly_chart_spec = spec["charts"]["weekly_purchase_sales"]
@@ -736,6 +839,73 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
       padding: 8px;
       background: #fbfcfd;
     }}
+    .balance-chart-wrap {{
+      margin: 0 0 18px;
+      padding: 10px 12px 2px;
+    }}
+    .balance-chart-wrap svg {{
+      display: block;
+      width: 100%;
+      min-width: 700px;
+      height: auto;
+    }}
+    .balance-block {{
+      stroke: #344054;
+      stroke-width: 1.5;
+    }}
+    .balance-inventory {{ fill: #dceff2; }}
+    .balance-sales {{ fill: #f7d8b5; }}
+    .balance-purchase {{ fill: #8fc2cc; }}
+    .balance-remainder {{ fill: url(#balance-remainder-hatch); }}
+    .balance-equation {{
+      fill: var(--text);
+      font-size: 18px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }}
+    .balance-note, .balance-side-note {{
+      fill: var(--muted);
+      font-size: 13px;
+    }}
+    .balance-equality-line {{
+      stroke: var(--accent);
+      stroke-width: 1.5;
+      stroke-dasharray: 7 6;
+    }}
+    .balance-total-label {{
+      fill: var(--accent);
+      font-size: 14px;
+      font-weight: 700;
+    }}
+    .balance-baseline {{
+      stroke: #667085;
+      stroke-width: 1.2;
+    }}
+    .balance-segment-label {{
+      fill: #1f2933;
+      font-size: 15px;
+      font-weight: 700;
+    }}
+    .balance-segment-value {{
+      fill: #344054;
+      font-size: 13px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }}
+    .balance-side-title {{
+      fill: var(--text);
+      font-size: 16px;
+      font-weight: 700;
+    }}
+    .balance-chart-empty {{
+      margin: 0 0 18px;
+      padding: 18px;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      color: var(--muted);
+      background: #fbfcfd;
+      font-size: 14px;
+    }}
     details {{
       margin-top: 14px;
       color: var(--muted);
@@ -780,6 +950,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
 
     <section aria-labelledby="amount-title">
       <h2 id="amount-title">금액 대사</h2>
+      {amount_balance_chart}
       <table class="amount-table">
         <thead>
           <tr>
