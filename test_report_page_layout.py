@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from plotly.offline import get_plotlyjs_version
+
 from generate_analysis_report_html import load_report_spec, load_sources, render_report_html
 from src.report_page_layout import DEFAULT_REPORT_PAGES, resolve_report_pages
 
@@ -24,7 +26,10 @@ class ReportPageLayoutTests(unittest.TestCase):
         self.assertLess(html.index('id="principal-title"'), html.index('id="vat-settlement-title"'))
         self.assertNotIn('id="inventory-flow-title"', html)
         self.assertNotIn('id="weekly-title"', html)
-        self.assertIn('src="https://cdn.plot.ly', html)
+        self.assertIn(
+            f'src="https://cdn.plot.ly/plotly-{get_plotlyjs_version()}.min.js"',
+            html,
+        )
 
     def test_empty_page_list_outputs_only_the_fixed_cover(self):
         spec = load_report_spec(BASE_DIR / "report_spec.yaml")
