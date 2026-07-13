@@ -173,7 +173,7 @@ def principal_margin_figure(df: pd.DataFrame, spec: dict[str, Any]) -> go.Figure
     unit_label = spec.get("unit_label", "원")
     principals = df["principal"] if "principal" in df else []
     margin_text = (
-        df["margin_rate"].map(lambda value: "-" if pd.isna(value) else f"{value:.1f}%")
+        df["margin_rate"].map(lambda value: "" if pd.isna(value) else f"{value:.1f}%")
         if "margin_rate" in df
         else []
     )
@@ -189,8 +189,7 @@ def principal_margin_figure(df: pd.DataFrame, spec: dict[str, Any]) -> go.Figure
             text=margin_text,
             textposition="outside",
             cliponaxis=False,
-            customdata=df.get("margin_status", pd.Series("confirmed", index=df.index)),
-            hovertemplate=f"%{{y}}<br>{_series_label(spec, 'sales_amount', '매출 공급가액')}: %{{x:,}} {unit_label}<br>마진 상태: %{{customdata}}<extra></extra>",
+            hovertemplate=f"%{{y}}<br>{_series_label(spec, 'sales_amount', '매출 공급가액')}: %{{x:,}} {unit_label}<extra></extra>",
         )
     )
     figure.add_trace(
