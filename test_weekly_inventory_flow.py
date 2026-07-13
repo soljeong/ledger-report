@@ -84,11 +84,11 @@ class WeeklyInventoryFlowTests(unittest.TestCase):
 
         self.assertIn('class="report-page report-page--inventory"', html)
         self.assertIn("주간 재고금액 흐름", html)
-        self.assertIn("매입 원가 유입, FIFO 출고 원가", html)
-        self.assertIn("주말 FIFO 재고금액", html)
+        self.assertIn("매입 원가 유입, 출고 원가", html)
+        self.assertIn("주말 재고금액", html)
         self.assertIn("1,510", html)
         self.assertIn('<th class="money">매입 증가</th>', html)
-        self.assertIn('<th class="money">출고 감소(FIFO 원가)</th>', html)
+        self.assertIn('<th class="money">출고 감소(원가)</th>', html)
         self.assertNotIn("오류", html)
         self.assertNotIn("검증", html)
 

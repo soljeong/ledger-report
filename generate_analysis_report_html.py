@@ -185,7 +185,7 @@ def _principal_rate(margin: Decimal, sales: Decimal) -> str:
 
 
 def render_principal_sales_chart(rows: list[dict[str, Any]]) -> str:
-    """Render revenue as a horizontal bar split into FIFO cost and gross margin."""
+    """Render revenue as a horizontal bar split into cost and gross margin."""
     prepared: list[dict[str, Any]] = []
     for row in rows:
         sales = _principal_decimal(row, "sales_amount_exact", "sales_amount")
@@ -230,7 +230,7 @@ def render_principal_sales_chart(rows: list[dict[str, Any]]) -> str:
             bar_html = (
                 f'<div class="principal-stack-chart__bar" style="width:{float(bar_width):.2f}%">'
                 f'<div class="principal-stack-chart__cost" style="width:{float(cost_width):.2f}%" '
-                f'title="FIFO 매출원가 {_principal_money(cost)}원">{cost_label}</div>'
+                f'title="매출원가 {_principal_money(cost)}원">{cost_label}</div>'
                 f'<div class="principal-stack-chart__margin" style="width:{float(margin_width):.2f}%" '
                 f'title="매출총이익 {_principal_money(margin)}원">{margin_label}</div>'
                 f"</div>"
@@ -239,7 +239,7 @@ def render_principal_sales_chart(rows: list[dict[str, Any]]) -> str:
             bar_html = (
                 f'<div class="principal-stack-chart__bar principal-stack-chart__bar--negative" '
                 f'style="width:{float(bar_width):.2f}%" '
-                f'title="매출 공급가액 {_principal_money(sales)}원 · FIFO 매출원가 {_principal_money(cost)}원 · '
+                f'title="매출 공급가액 {_principal_money(sales)}원 · 매출원가 {_principal_money(cost)}원 · '
                 f'매출총이익 {_principal_money(margin)}원"></div>'
             )
 
@@ -260,13 +260,13 @@ def render_principal_sales_chart(rows: list[dict[str, Any]]) -> str:
     empty_note = (
         '<p class="principal-stack-chart__caption">표시할 원청별 매출 데이터가 없습니다.</p>'
         if not prepared
-        else '<p class="principal-stack-chart__caption">막대 길이는 매출 공급가액이며, 내부 구간은 FIFO 매출원가와 매출총이익입니다. 음수 마진은 우측 값과 막대 끝 표시로 구분합니다.</p>'
+        else '<p class="principal-stack-chart__caption">막대 길이는 매출 공급가액이며, 내부 구간은 매출원가와 매출총이익입니다. 음수 마진은 우측 값과 막대 끝 표시로 구분합니다.</p>'
     )
 
     return f"""
-        <div class="principal-stack-chart" id="principal-stacked-sales-chart" aria-label="원청별 매출 공급가액과 FIFO 원가 및 매출총이익">
+        <div class="principal-stack-chart" id="principal-stacked-sales-chart" aria-label="원청별 매출 공급가액과 원가 및 매출총이익">
           <div class="principal-stack-chart__legend">
-            <span><i class="cost"></i>FIFO 매출원가</span>
+            <span><i class="cost"></i>매출원가</span>
             <span><i class="margin"></i>매출총이익</span>
             <span class="principal-stack-chart__legend-note">막대 합계 = 매출 공급가액</span>
           </div>

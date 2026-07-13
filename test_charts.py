@@ -32,7 +32,7 @@ class ChartFigureTests(unittest.TestCase):
         self.assertEqual(figure.layout.yaxis.title.text, "금액")
         self.assertEqual(len(figure.data), 2)
         self.assertEqual(figure.data[0].name, "매출 공급가액")
-        self.assertEqual(figure.data[1].name, "FIFO 매출원가")
+        self.assertEqual(figure.data[1].name, "매출원가")
         self.assertEqual(figure.layout.barmode, "overlay")
 
     def test_weekly_inventory_flow_chart_overlays_sales_on_negative_side(self) -> None:
@@ -85,7 +85,7 @@ class ChartFigureTests(unittest.TestCase):
         self.assertEqual(figure.layout.yaxis.title.text, "원청")
         self.assertEqual(len(figure.data), 2)
         self.assertEqual(figure.data[0].name, "매출 공급가액")
-        self.assertEqual(figure.data[1].name, "FIFO 매출원가")
+        self.assertEqual(figure.data[1].name, "매출원가")
         self.assertGreaterEqual(figure.layout.margin.r, 120)
         self.assertIs(figure.data[0].cliponaxis, False)
         self.assertEqual(figure.layout.barmode, "overlay")

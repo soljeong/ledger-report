@@ -97,7 +97,7 @@ def render_amount_balance_chart(
     prior_shortage_settlement_amount: Any,
     gross_profit: Any,
 ) -> str:
-    """Retain the exact FIFO identity helper for callers that use it directly.
+    """Retain the exact cost identity helper for callers that use it directly.
 
     The main HTML report intentionally does not render this diagnostic chart.
     """
@@ -143,7 +143,7 @@ def render_amount_balance_chart(
         return "".join(result)
 
     return f'''<div class="chart-wrap balance-chart-wrap" aria-label="금액 대사 밸런스 블록 차트">
-      <svg id="amount-balance-chart" viewBox="0 0 980 410" role="img"><title>FIFO 금액 밸런스 차트</title><desc>매출과 종료일 FIFO 재고는 기초재고, 기간 순매입원가, 후속 소급배정원가 및 매출총이익의 합계와 같다.</desc>
+      <svg id="amount-balance-chart" viewBox="0 0 980 410" role="img"><title>원가 금액 밸런스 차트</title><desc>매출과 종료일 재고는 기초재고, 기간 순매입원가, 후속 소급배정원가 및 매출총이익의 합계와 같다.</desc>
       <text x="490" y="34" text-anchor="middle">양쪽 exact 합계 {_base.money(_base.rounded_amount(left_total))}원</text>
       {segments(170, [('매출 공급가액', sales), ('종료일 재고', inventory), ('이전기간 부족 보충', prior_shortage)], '#2f6f7e')}
       {segments(620, [('기초재고', opening), ('기간 순매입', purchase), ('후속 소급배정', backfill), ('매출총이익', profit)], '#c47a23')}
@@ -156,7 +156,7 @@ def weekly_inventory_flow_rows(
     inventory_records: list[dict[str, Any]],
     reconciliation: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build weekly inventory flow from published FIFO events.
+    """Build weekly inventory flow from published cost events.
 
     Decimal values are kept through aggregation and rounded only for display.
     """
@@ -637,11 +637,11 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     metric_cards = "\n".join(
         [
             _money_metric("매출 공급가액", sales_amount, "부가세 제외"),
-            _money_metric("FIFO 매출원가", fifo_cost, "매출별 원가층 배정"),
-            _money_metric("매출총이익", gross_profit, "매출 공급가액 - FIFO 원가"),
+            _money_metric("매출원가", fifo_cost, "매출별 원가층 배정"),
+            _money_metric("매출총이익", gross_profit, "매출 공급가액 - 매출원가"),
             _metric_card("매출총이익률", _format_percent(gross_profit_rate), "표시 금액 기준"),
-            _money_metric("기말 FIFO 재고금액", ending_inventory_amount, f"기준일 {inventory_date}"),
-            _quantity_metric("기말 장부재고수량", ending_quantity, "품목별 부호 포함 합계"),
+            _money_metric("기초 재고금액", opening_stock_amount, "분석 시작일 전 원가층"),
+            _money_metric("기말 재고금액", ending_inventory_amount, f"기준일 {inventory_date}"),
         ]
     )
 
@@ -850,7 +850,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         <div class="panel soft">
           <h3>계산 기준</h3>
           <ul class="method-list">
-            <li>매출은 공급가액, 매출원가와 기말 재고는 FIFO 원가를 사용합니다.</li>
+            <li>매출은 공급가액, 매출원가와 기말 재고는 원가층 기준으로 표시합니다.</li>
             <li>부가세는 손익과 분리하여 금액 비교 표에서 보여줍니다.</li>
             <li>주간 표는 월요일 시작 주 단위로 집계합니다.</li>
             <li>기말 재고금액은 분석 종료일의 FIFO 잔여 원가층 합계입니다.</li>
@@ -863,7 +863,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     <article class="report-page report-page--profit">
       <header class="page-head">
         <div><p class="eyebrow">PROFIT</p><h2 id="weekly-title">기간 손익 흐름</h2></div>
-        <p>주별 매출 공급가액과 FIFO 매출원가를 같은 축에서 비교합니다.</p>
+        <p>주별 매출 공급가액과 매출원가를 같은 축에서 비교합니다.</p>
       </header>
 
       <section class="section">
@@ -875,7 +875,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
       <section class="section">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>주 시작일</th><th class="num">건수</th><th class="num">수량</th><th class="money">매출 공급가액</th><th class="money">FIFO 원가</th><th class="money">매출총이익</th><th class="num">이익률</th></tr></thead>
+            <thead><tr><th>주 시작일</th><th class="num">건수</th><th class="num">수량</th><th class="money">매출 공급가액</th><th class="money">매출원가</th><th class="money">매출총이익</th><th class="num">이익률</th></tr></thead>
             <tbody>{_render_weekly_profit_rows(weekly_profit)}</tbody>
           </table>
         </div>
@@ -896,7 +896,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     <article class="report-page report-page--inventory">
       <header class="page-head">
         <div><p class="eyebrow">INVENTORY</p><h2 id="inventory-flow-title">{escape(inventory_spec['title'])}</h2></div>
-        <p>매입 원가 유입, FIFO 출고 원가, 주말 재고금액의 흐름을 함께 봅니다.</p>
+        <p>매입 원가 유입, 출고 원가, 주말 재고금액의 흐름을 함께 봅니다.</p>
       </header>
 
       <section class="section">
@@ -907,7 +907,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
       <section class="section">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>주 시작일</th><th class="money">매입 증가</th><th class="money">출고 감소(FIFO 원가)</th><th class="money">순증감</th><th class="money">주말 재고금액</th></tr></thead>
+            <thead><tr><th>주 시작일</th><th class="money">매입 증가</th><th class="money">출고 감소(원가)</th><th class="money">순증감</th><th class="money">주말 재고금액</th></tr></thead>
             <tbody>{_render_inventory_flow_rows(inventory_flow)}</tbody>
           </table>
         </div>
@@ -916,10 +916,10 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
       <section class="section">
         <div class="section-title-row"><h3>기간 재고 구성</h3><p>금액과 수량을 분리해 표시</p></div>
         <div class="mini-grid">
-          <div class="mini-card"><span>기초 FIFO 재고금액</span><strong>{_base.money(opening_stock_amount)}원</strong></div>
+          <div class="mini-card"><span>기초 재고금액</span><strong>{_base.money(opening_stock_amount)}원</strong></div>
           <div class="mini-card"><span>기간 매입원가</span><strong>{_base.money(purchase_cost)}원</strong></div>
-          <div class="mini-card"><span>FIFO 매출원가</span><strong>{_base.money(fifo_cost)}원</strong></div>
-          <div class="mini-card"><span>기말 FIFO 재고금액</span><strong>{_base.money(ending_inventory_amount)}원</strong></div>
+          <div class="mini-card"><span>매출원가</span><strong>{_base.money(fifo_cost)}원</strong></div>
+          <div class="mini-card"><span>기말 재고금액</span><strong>{_base.money(ending_inventory_amount)}원</strong></div>
           <div class="mini-card"><span>기초 재고수량</span><strong>{_base.number(_summary_value(summary, 'opening_signed_stock_quantity', 'opening_stock_quantity'))}</strong></div>
           <div class="mini-card"><span>기간 매입수량</span><strong>{_base.number(_summary_value(summary, 'period_purchase_quantity'))}</strong></div>
           <div class="mini-card"><span>기간 매출수량</span><strong>{_base.number(_summary_value(summary, 'period_sales_quantity'))}</strong></div>
@@ -940,7 +940,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         <div class="chart-frame">{principal_chart}</div>
         <div class="table-wrap" style="margin-top: 12px;">
           <table>
-            <thead><tr><th class="rank">순위</th><th>원청</th><th class="num">건수</th><th class="num">수량</th><th class="money">매출 공급가액</th><th class="money">FIFO 원가</th><th class="money">매출총이익</th></tr></thead>
+            <thead><tr><th class="rank">순위</th><th>원청</th><th class="num">건수</th><th class="num">수량</th><th class="money">매출 공급가액</th><th class="money">매출원가</th><th class="money">매출총이익</th></tr></thead>
             <tbody>{_render_principal_rows(principal_rows)}</tbody>
           </table>
         </div>
@@ -968,7 +968,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
       <section class="section">
         <div class="table-wrap">
           <table class="detail-table">
-            <thead><tr><th>ID</th><th>품명</th><th class="num">기초</th><th class="num">매입</th><th class="num">매출</th><th class="num">기말</th><th class="money">매출액</th><th class="money">FIFO 원가</th><th class="money">매출이익</th><th class="money">재고금액</th></tr></thead>
+            <thead><tr><th>ID</th><th>품명</th><th class="num">기초</th><th class="num">매입</th><th class="num">매출</th><th class="num">기말</th><th class="money">매출액</th><th class="money">매출원가</th><th class="money">매출이익</th><th class="money">재고금액</th></tr></thead>
             <tbody>{_render_item_detail_rows(item_rows)}</tbody>
           </table>
         </div>

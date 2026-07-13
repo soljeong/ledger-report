@@ -27,18 +27,19 @@ EXAMPLE_DIR = BASE_DIR / "examples" / "dummy_json"
 class GenerateAnalysisReportHtmlTests(unittest.TestCase):
     def test_report_focuses_on_analysis_and_omits_diagnostics(self):
         html = render_report_html(load_sources(EXAMPLE_DIR))
+        overview = html.split('<article class="report-page report-page--profit">', 1)[0]
 
         self.assertEqual(html.count('class="report-page'), 5)
         for text in (
             "2026-05-10 ~ 2026-05-20",
             "2026-05-25",
             "매출 공급가액",
-            "FIFO 매출원가",
+            "매출원가",
             "매출총이익",
             "매출총이익률",
             "기간 손익 흐름",
             "주간 재고금액 흐름",
-            "원청별 매출과 FIFO 원가",
+            "원청별 매출과 원가",
             "거래처별 매출 TOP 8",
             "품목별 매출 TOP 8",
             "주요 품목 손익·재고",
@@ -69,6 +70,23 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertNotIn("평균원가", html)
         self.assertNotIn("최종매입가", html)
         self.assertNotIn('id="amount-balance-chart"', html)
+        self.assertNotIn("기말 장부재고수량", overview)
+        self.assertIn("기초 재고금액", overview)
+        expected_metrics = (
+            "매출 공급가액",
+            "매출원가",
+            "매출총이익",
+            "매출총이익률",
+            "기초 재고금액",
+            "기말 재고금액",
+        )
+        positions = [overview.index(label) for label in expected_metrics]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(
+            html.replace("FIFO Widget", "").count("FIFO"),
+            1,
+        )
+        self.assertIn("기말 재고금액은 분석 종료일의 FIFO 잔여 원가층 합계입니다.", html)
 
     def test_report_uses_fifo_allocations_for_principal_costs(self):
         sources = load_sources(EXAMPLE_DIR)
@@ -76,7 +94,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         principal_section = html.split('id="principal-title"', 1)[1]
         fifo_total = sources["reconciliation"]["summary"]["fifo_sales_cost_amount"]
 
-        self.assertIn("FIFO 원가", principal_section)
+        self.assertIn("매출원가", principal_section)
         self.assertIn("Demo Buyer A", principal_section)
         rows = principal_sales_cost_rows(
             sources["sales"]["records"],
@@ -187,7 +205,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
             html = output_path.read_text(encoding="utf-8")
 
         self.assertIn("주요 품목 손익·재고", html)
-        self.assertIn("FIFO 매출원가", html)
+        self.assertIn("매출원가", html)
 
     def test_vat_is_shown_as_neutral_amount_comparison(self):
         sources = deepcopy(load_sources(EXAMPLE_DIR))

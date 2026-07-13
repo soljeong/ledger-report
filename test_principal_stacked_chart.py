@@ -6,7 +6,7 @@ from generate_analysis_report_html import render_principal_sales_chart
 
 
 class PrincipalStackedChartTests(unittest.TestCase):
-    def test_renders_fifo_cost_and_margin_as_stacked_revenue_bar(self):
+    def test_renders_cost_and_margin_as_stacked_revenue_bar(self):
         html = render_principal_sales_chart(
             [
                 {
@@ -23,7 +23,8 @@ class PrincipalStackedChartTests(unittest.TestCase):
         )
 
         self.assertIn('id="principal-stacked-sales-chart"', html)
-        self.assertIn("FIFO 매출원가", html)
+        self.assertIn("매출원가", html)
+        self.assertNotIn("FIFO", html)
         self.assertIn("매출총이익", html)
         self.assertIn("Demo Buyer C", html)
         self.assertIn("4,500", html)

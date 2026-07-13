@@ -110,7 +110,7 @@ def _movement_label(value: Decimal, result: bool = False, plain: bool = False) -
 
 
 def render_profit_flow_bridge(summary: dict[str, Any]) -> str:
-    """Render the mockup's option 2b as a FIFO-aware waterfall bridge."""
+    """Render the mockup's option 2b as a cost-aware waterfall bridge."""
     sales = _summary_decimal(
         summary,
         "period_sales_supply_amount_exact",
@@ -228,11 +228,11 @@ def render_profit_flow_bridge(summary: dict[str, Any]) -> str:
             <span class="profit-flow-bridge__chip">2b</span>
             <h3 id="profit-flow-bridge-title">손익 흐름 브릿지</h3>
           </div>
-          <p>매출 공급가액에 기말 FIFO 재고를 더하고 매입·기초재고를 차감해 매출총이익으로 연결합니다.</p>
+          <p>매출 공급가액에 기말 재고를 더하고 매입·기초재고를 차감해 매출총이익으로 연결합니다.</p>
         </div>
         <svg id="profit-flow-bridge" viewBox="0 0 752 270" role="img" aria-label="손익 흐름 폭포 차트">
           <title>손익 흐름 브릿지</title>
-          <desc>매출, 기말 FIFO 재고, 기간 매입원가, 기초 FIFO 재고를 거쳐 매출총이익을 보여주는 폭포 차트</desc>
+          <desc>매출, 기말 재고, 기간 매입원가, 기초 재고를 거쳐 매출총이익을 보여주는 폭포 차트</desc>
           <g stroke="#eef2f6" stroke-width="1">
             <line x1="48" y1="65" x2="710" y2="65"></line>
             <line x1="48" y1="122" x2="710" y2="122"></line>
@@ -244,7 +244,7 @@ def render_profit_flow_bridge(summary: dict[str, Any]) -> str:
           {''.join(bars)}
           {''.join(labels)}
         </svg>
-        <p class="profit-flow-bridge__caption">FIFO 항등식 기준 · 공급가액 기준 손익{escape(adjustment_text)}</p>
+        <p class="profit-flow-bridge__caption">원가 항등식 기준 · 공급가액 기준 손익{escape(adjustment_text)}</p>
       </section>
     """
 

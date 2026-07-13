@@ -7,7 +7,7 @@ plotly:
 
 charts:
   weekly_purchase_sales:
-    title: "주간 매출과 FIFO 원가"
+    title: "주간 매출과 매출원가"
     x_axis_title: "주 시작일"
     y_axis_title: "금액"
     unit_label: "원"
@@ -17,7 +17,7 @@ charts:
         label: "매출 공급가액"
         color: "#b54708"
       cost_amount:
-        label: "FIFO 매출원가"
+        label: "매출원가"
         color: "#c47a23"
 
   weekly_inventory_flow:
@@ -33,17 +33,17 @@ charts:
         label: "주간 매입 증가"
         color: "#2f6f7e"
       outbound_cost_estimate:
-        label: "주간 출고 감소(FIFO 원가)"
+        label: "주간 출고 감소(원가)"
         color: "#c47a23"
       sales_amount:
         label: "주간 매출 공급가액"
         color: "#b54708"
       estimated_inventory_amount:
-        label: "주말 FIFO 재고금액"
+        label: "주말 재고금액"
         color: "#344054"
 
   principal_margin:
-    title: "원청별 매출과 FIFO 원가"
+    title: "원청별 매출과 원가"
     x_axis_title: "금액"
     y_axis_title: "원청"
     unit_label: "원"
@@ -53,5 +53,5 @@ charts:
         label: "매출 공급가액"
         color: "#b54708"
       cost_amount:
-        label: "FIFO 매출원가"
+        label: "매출원가"
         color: "#c47a23"
