@@ -4,8 +4,7 @@ from collections.abc import Mapping
 from html.parser import HTMLParser
 from typing import Any
 
-import plotly
-from plotly.offline import get_plotlyjs
+from plotly.offline import get_plotlyjs, get_plotlyjs_version
 
 
 REPORT_PAGE_ANCHORS: dict[str, str] = {
@@ -163,7 +162,7 @@ def _plotly_script(spec: Mapping[str, Any] | None) -> str:
     if value == "cdn":
         return (
             '<script charset="utf-8" '
-            f'src="https://cdn.plot.ly/plotly-{plotly.__version__}.min.js"></script>'
+            f'src="https://cdn.plot.ly/plotly-{get_plotlyjs_version()}.min.js"></script>'
         )
     raise ValueError(f"unsupported plotly.include_plotlyjs value: {value!r}")
 
