@@ -548,9 +548,20 @@ def _cancellation_allocations(event: dict[str, Any]) -> list[dict[str, Any]]:
     return allocations
 
 
-def _cancellation_events_by_reference(reconciliation: dict[str, Any]) -> dict[tuple[str, str, str], dict[str, Any]]:
+def _cancellation_type(row: dict[str, Any]) -> str:
+    """Normalize the engine's singular sale event to the public sheet label."""
+    event_type = row.get("type") or row.get("event_type")
+    return "sales_cancellation" if event_type == "sale_cancellation" else str(event_type)
+
+
+def _cancellation_reference(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    """Keep purchase and sales cancellations distinct when source fields match."""
+    return (_cancellation_type(row), *_transaction_reference(row))
+
+
+def _cancellation_events_by_reference(reconciliation: dict[str, Any]) -> dict[tuple[str, str, str, str], dict[str, Any]]:
     return {
-        _transaction_reference(event): event
+        _cancellation_reference(event): event
         for event in reconciliation.get("cancellation_events", [])
         if isinstance(event, dict)
     }
@@ -599,11 +610,72 @@ def _fifo_product_sort_key(product_id: Any) -> str:
     return str(product_id)
 
 
-def _sale_unconfirmed_quantity(event: dict[str, Any], sales_allocations: dict[str, dict[str, Any]]) -> Any:
+def _unconfirmed_sales_cancelled_by_event(reconciliation: dict[str, Any]) -> set[str]:
+    """Return sales whose published cancellation removed unconfirmed quantity."""
+    return {
+        str(sale.get("sale_id"))
+        for cancellation in reconciliation.get("cancellation_events", [])
+        if isinstance(cancellation, dict) and _cancellation_type(cancellation) == "sales_cancellation"
+        for sale in cancellation.get("sales", [])
+        if isinstance(sale, dict) and sale.get("sale_id") and _is_nonzero_quantity(sale.get("unconfirmed_quantity"))
+    }
+
+
+def _sale_unconfirmed_quantity(
+    event: dict[str, Any],
+    sales_allocations: dict[str, dict[str, Any]],
+    unconfirmed_sales_cancelled: set[str],
+) -> Any:
+    """Use the source sale's pre-cancellation quantity when a cancellation changed it."""
+    if _transaction_id(event) in unconfirmed_sales_cancelled and _is_nonzero_quantity(event.get("current_unconfirmed_quantity")):
+        return event.get("current_unconfirmed_quantity")
     allocation = sales_allocations.get(_transaction_id(event), {})
     if "unconfirmed_quantity" in allocation:
         return allocation.get("unconfirmed_quantity")
     return event.get("current_unconfirmed_quantity", event.get("unconfirmed_quantity_delta"))
+
+
+def _is_nonzero_quantity(value: Any) -> bool:
+    value = _row_number(value)
+    if isinstance(value, (int, float, Decimal)):
+        return value != 0
+    return value not in (None, "", "0", "0.0", "0.00")
+
+
+def _unallocated_cancellation_rows(
+    base: dict[str, Any],
+    event: dict[str, Any],
+    cancellation: dict[str, Any],
+    *,
+    start_sequence: int,
+) -> list[dict[str, Any]]:
+    """Display existing unconfirmed-quantity reversals without reconstructing FIFO.
+
+    `sales_cancellation.sales[].unconfirmed_quantity` is the quantity removed
+    from each original sale.  It is authoritative for a cancellation with
+    multiple affected sales.  Older payloads can still use the published
+    cancellation event delta as a single display fact.
+    """
+    rows: list[dict[str, Any]] = []
+    for sale in cancellation.get("sales", []):
+        if not isinstance(sale, dict) or not _is_nonzero_quantity(sale.get("unconfirmed_quantity")):
+            continue
+        row = dict(base)
+        row.update(
+            allocation_sequence=start_sequence + len(rows),
+            allocation_type="unallocated_cancellation",
+            unallocated_quantity=_signed_cancellation_value(sale.get("unconfirmed_quantity"), base["transaction_quantity"]),
+        )
+        rows.append(row)
+    if rows or not _is_nonzero_quantity(event.get("unconfirmed_quantity_delta")):
+        return rows
+    row = dict(base)
+    row.update(
+        allocation_sequence=start_sequence,
+        allocation_type="unallocated_cancellation",
+        unallocated_quantity=_signed_cancellation_value(event.get("unconfirmed_quantity_delta"), base["transaction_quantity"]),
+    )
+    return [row]
 
 
 def build_fifo_calculation_rows(report_data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -623,11 +695,12 @@ def build_fifo_calculation_rows(report_data: dict[str, Any]) -> list[dict[str, A
         for sale in reconciliation.get("sales_allocations", [])
         if isinstance(sale, dict)
     }
+    unconfirmed_sales_cancelled = _unconfirmed_sales_cancelled_by_event(reconciliation)
     cancellation_events = _cancellation_events_by_reference(reconciliation)
     backfill_purchases = _backfill_purchase_references(reconciliation)
 
     transaction_rows: list[tuple[tuple[Any, ...], list[dict[str, Any]]]] = []
-    seen_cancellations: set[tuple[str, str, str]] = set()
+    seen_cancellations: set[tuple[str, str, str, str]] = set()
 
     for event in reconciliation.get("purchase_cost_events", []):
         if not isinstance(event, dict) or not _fifo_event_is_in_display_range(event, "purchase", period_end, backfill_purchases):
@@ -639,8 +712,9 @@ def build_fifo_calculation_rows(report_data: dict[str, Any]) -> list[dict[str, A
             row["source_purchase_unit_cost"] = source.get("unit_price")
             rows = [row]
         elif event_type == "purchase_cancellation":
-            cancellation = cancellation_events.get(_transaction_reference(event), event)
-            seen_cancellations.add(_transaction_reference(event))
+            cancellation_reference = _cancellation_reference(event)
+            cancellation = cancellation_events.get(cancellation_reference, event)
+            seen_cancellations.add(cancellation_reference)
             base = _fifo_base_row(event, source, "purchase_cancellation")
             allocations = _cancellation_allocations(cancellation)
             rows = [
@@ -673,7 +747,7 @@ def build_fifo_calculation_rows(report_data: dict[str, Any]) -> list[dict[str, A
                 for sequence, allocation in enumerate(allocations, start=1)
                 if isinstance(allocation, dict)
             ]
-            unconfirmed_quantity = _sale_unconfirmed_quantity(event, sales_allocations)
+            unconfirmed_quantity = _sale_unconfirmed_quantity(event, sales_allocations, unconfirmed_sales_cancelled)
             if unconfirmed_quantity not in (None, 0, Decimal("0"), "0", "0.0"):
                 row = dict(base)
                 row.update(
@@ -683,18 +757,38 @@ def build_fifo_calculation_rows(report_data: dict[str, Any]) -> list[dict[str, A
                 )
                 rows.append(row)
             if not rows:
-                # A zero-effective sale has no allocation fact to display;
-                # its separate cancellation event remains in the transaction flow.
-                continue
+                # A fully cancelled shortage has final quantity zero, but its
+                # original sale and the later cancellation are both public
+                # transaction facts that must remain reviewable.
+                initial_unconfirmed_quantity = event.get("unconfirmed_quantity_delta")
+                if _is_nonzero_quantity(initial_unconfirmed_quantity):
+                    row = dict(base)
+                    row.update(
+                        allocation_sequence=1,
+                        allocation_type="unallocated",
+                        unallocated_quantity=initial_unconfirmed_quantity,
+                    )
+                    rows.append(row)
+                else:
+                    continue
         elif event_type == "sale_cancellation":
-            cancellation = cancellation_events.get(_transaction_reference(event), event)
-            seen_cancellations.add(_transaction_reference(event))
+            cancellation_reference = _cancellation_reference(event)
+            cancellation = cancellation_events.get(cancellation_reference, event)
+            seen_cancellations.add(cancellation_reference)
             base = _fifo_base_row(event, source, "sales_cancellation")
             allocations = _cancellation_allocations(cancellation)
             rows = [
                 _allocation_row(base, allocation, sequence, "sales_cancellation", cancellation=True)
                 for sequence, allocation in enumerate(allocations, start=1)
             ]
+            rows.extend(
+                _unallocated_cancellation_rows(
+                    base,
+                    event,
+                    cancellation,
+                    start_sequence=len(rows) + 1,
+                )
+            )
             if not rows:
                 row = dict(base)
                 row.update(fifo_cost_amount=event.get("cost_amount"), allocation_type="sales_cancellation")
@@ -724,6 +818,15 @@ def build_fifo_calculation_rows(report_data: dict[str, Any]) -> list[dict[str, A
             _allocation_row(base, allocation, sequence, transaction_type, cancellation=True)
             for sequence, allocation in enumerate(_cancellation_allocations(cancellation), start=1)
         ]
+        if not is_purchase:
+            rows.extend(
+                _unallocated_cancellation_rows(
+                    base,
+                    event,
+                    cancellation,
+                    start_sequence=len(rows) + 1,
+                )
+            )
         if not rows:
             rows = [base]
         transaction_rows.append(((_fifo_product_sort_key(base["product_id"]), *event_sort_key(event, "purchase" if is_purchase else "sales")), rows))

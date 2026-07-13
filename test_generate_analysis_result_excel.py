@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from openpyxl import load_workbook
 
+from analyze_inventory import build_reconciliation
 from generate_analysis_report_html_core import build_report_data, load_sources
 from generate_analysis_result_excel import (
     FIFO_CALCULATION_COLUMNS,
@@ -34,6 +35,44 @@ class GenerateAnalysisResultExcelTests(unittest.TestCase):
         export_workbook(sources or load_sources(EXAMPLE_DIR), output)
         self.addCleanup(tempdir.cleanup)
         return output, load_workbook(output, data_only=False)
+
+    @staticmethod
+    def _fifo_report_data(purchases, sales, inventory_quantity):
+        reconciliation = build_reconciliation(
+            {"records": purchases},
+            {"records": sales},
+            {
+                "records": [
+                    {
+                        "product_id": 1,
+                        "item_name": "Unallocated Item",
+                        "specification": "A",
+                        "stock_quantity": inventory_quantity,
+                    }
+                ]
+            },
+            "2026-01-01",
+            "2026-01-31",
+            "2026-01-31",
+        )
+        return {"reconciliation": reconciliation, "records": {"purchase": purchases, "sales": sales}}
+
+    @staticmethod
+    def _sale_record(date, quantity, voucher, excel_row):
+        amount = quantity * 100
+        return {
+            "date": date,
+            "voucher": voucher,
+            "excel_row": excel_row,
+            "product_id": 1,
+            "item_name": "Unallocated Item",
+            "specification": "A",
+            "quantity": quantity,
+            "unit_price": 100,
+            "supply_amount": amount,
+            "vat": 0,
+            "total_amount": amount,
+        }
 
     @staticmethod
     def _labeled_row(workbook, sheet_name: str, label: str):
@@ -194,6 +233,55 @@ class GenerateAnalysisResultExcelTests(unittest.TestCase):
         )
         self.assertEqual(displayed_sales_cost, published_sales_cost)
         self.assertEqual(displayed_sales_cost, reconciliation["summary"]["fifo_sales_cost_amount"])
+
+    def test_fifo_cancellation_reference_keeps_purchase_and_sales_streams_separate(self):
+        sources = copy.deepcopy(load_sources(EXAMPLE_DIR))
+        reconciliation = sources["reconciliation"]
+        purchase_cancellation = next(event for event in reconciliation["cancellation_events"] if event["type"] == "purchase_cancellation")
+        sales_cancellation = next(event for event in reconciliation["cancellation_events"] if event["type"] == "sales_cancellation")
+        sales_cost_event = next(event for event in reconciliation["sales_cost_events"] if event["event_type"] == "sale_cancellation")
+        sales_source = next(record for record in sources["sales"]["records"] if record["quantity"] < 0)
+        shared_reference = {
+            "date": purchase_cancellation["date"],
+            "voucher": purchase_cancellation["voucher"],
+            "excel_row": purchase_cancellation["excel_row"],
+        }
+        for event in (sales_cancellation, sales_cost_event, sales_source):
+            event.update(shared_reference)
+
+        rows = build_fifo_calculation_rows(build_report_data(sources))
+        purchase_rows = [row for row in rows if row["transaction_type"] == "purchase_cancellation"]
+        sales_rows = [row for row in rows if row["transaction_type"] == "sales_cancellation"]
+
+        self.assertEqual([(row["source_purchase_date"], row["fifo_cost_amount"]) for row in purchase_rows], [("2026-05-11", -180)])
+        self.assertEqual([(row["source_purchase_date"], row["fifo_cost_amount"]) for row in sales_rows], [("2026-05-10", -240), ("2026-05-10", -160)])
+
+    def test_fifo_unallocated_sale_and_cancellation_rows_preserve_quantity_changes(self):
+        partial_sales = [
+            self._sale_record("2026-01-01", 10, 1, 2),
+            self._sale_record("2026-01-02", -4, 2, 3),
+        ]
+        partial_rows = build_fifo_calculation_rows(self._fifo_report_data([], partial_sales, -6))
+        self.assertEqual(
+            [
+                (row["transaction_type"], row["transaction_quantity"], row["allocation_type"], row["unallocated_quantity"])
+                for row in partial_rows
+            ],
+            [("sales", 10, "unallocated", 10), ("sales_cancellation", -4, "unallocated_cancellation", -4)],
+        )
+
+        fully_cancelled_sales = [
+            self._sale_record("2026-01-01", 10, 1, 2),
+            self._sale_record("2026-01-02", -10, 2, 3),
+        ]
+        fully_cancelled_rows = build_fifo_calculation_rows(self._fifo_report_data([], fully_cancelled_sales, 0))
+        self.assertEqual(
+            [
+                (row["transaction_type"], row["transaction_quantity"], row["allocation_type"], row["unallocated_quantity"])
+                for row in fully_cancelled_rows
+            ],
+            [("sales", 10, "unallocated", 10), ("sales_cancellation", -10, "unallocated_cancellation", -10)],
+        )
 
     def test_writes_no_formulas_or_external_links_and_uses_native_internal_charts(self):
         sources = copy.deepcopy(load_sources(EXAMPLE_DIR))
