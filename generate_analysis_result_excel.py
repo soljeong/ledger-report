@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import tempfile
@@ -60,6 +61,7 @@ REQUIRED_RECONCILIATION_SUMMARY_FIELDS = {
     "ending_fifo_inventory_amount": ("inventory_amount_at_fifo", "ending_fifo_inventory_amount"),
     "ending_signed_stock_quantity": ("ending_signed_stock_quantity",),
 }
+ALLOWED_GROSS_PROFIT_STATUSES = frozenset({"confirmed", "provisional", "error"})
 
 RECORD_COLUMNS = {
     "purchase": ["date", "voucher", "company", "product_id", "item_name", "specification", "quantity", "unit_price", "supply_amount", "vat", "total_amount", "excel_row"],
@@ -96,6 +98,33 @@ def _present(value: Any) -> bool:
     return value is not None and (not isinstance(value, str) or bool(value.strip()))
 
 
+def _is_iso_date(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
+
+
+def _is_finite_number(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        return False
+    if isinstance(value, int):
+        return True
+    if isinstance(value, Decimal):
+        return value.is_finite()
+    return math.isfinite(value)
+
+
+def _first_reconciliation_value(summary: dict[str, Any], candidates: tuple[str, ...]) -> tuple[str, Any] | None:
+    """Match the report-data fallback order without masking a malformed primary key."""
+    for candidate in candidates:
+        if candidate in summary:
+            return candidate, summary[candidate]
+    return None
+
+
 def _validate_reconciliation_contract(reconciliation: dict[str, Any], path: Path) -> None:
     """Reject a JSON file that lacks the calculation results required by the workbook."""
     summary = reconciliation.get("summary")
@@ -105,14 +134,19 @@ def _validate_reconciliation_contract(reconciliation: dict[str, Any], path: Path
     if not isinstance(metadata, dict):
         raise ValueError(f"required reconciliation JSON has no metadata object: {path}")
 
-    missing = [field for field in REQUIRED_RECONCILIATION_METADATA_FIELDS if not _present(metadata.get(field))]
-    missing.extend(
-        label
-        for label, candidates in REQUIRED_RECONCILIATION_SUMMARY_FIELDS.items()
-        if not any(_present(summary.get(candidate)) for candidate in candidates)
-    )
-    if missing:
-        raise ValueError(f"required reconciliation results are missing in {path}: {', '.join(missing)}")
+    invalid = [field for field in REQUIRED_RECONCILIATION_METADATA_FIELDS if not _is_iso_date(metadata.get(field))]
+    for label, candidates in REQUIRED_RECONCILIATION_SUMMARY_FIELDS.items():
+        resolved = _first_reconciliation_value(summary, candidates)
+        value = resolved[1] if resolved is not None else None
+        is_valid = (
+            isinstance(value, str) and value in ALLOWED_GROSS_PROFIT_STATUSES
+            if label == "gross_profit_status"
+            else _is_finite_number(value)
+        )
+        if not is_valid:
+            invalid.append(label)
+    if invalid:
+        raise ValueError(f"required reconciliation results are missing or invalid in {path}: {', '.join(invalid)}")
 
 
 def load_analysis_sources(input_dir: Path) -> tuple[dict[str, Any], dict[str, Path], dict[str, Path]]:
@@ -582,6 +616,10 @@ def _chart_data_issues(
     issues: dict[str, str] = {}
     for chart_id, title, records, preferred_columns, category, series in requirements:
         if not records:
+            # A clean analysis has no validation entries.  Its type-count
+            # chart is intentionally absent, not evidence of missing data.
+            if chart_id == "validation_types" and not validation_rows:
+                continue
             issues[chart_id] = f"{title}: 차트 데이터 행이 제공되지 않았다."
             continue
         columns = _stable_columns(records, preferred_columns)

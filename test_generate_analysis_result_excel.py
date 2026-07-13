@@ -225,6 +225,52 @@ class GenerateAnalysisResultExcelTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "required reconciliation results are missing.*gross_profit"):
                 load_analysis_sources(input_dir)
 
+    def test_invalid_core_reconciliation_values_fail_schema_validation(self):
+        invalid_values = (
+            ("summary", "gross_profit", {}),
+            ("summary", "ending_signed_stock_quantity", []),
+            ("summary", "fifo_sales_cost_amount", float("nan")),
+            ("summary", "gross_profit_status", "not-a-status"),
+            ("metadata", "period_start", "2026/05/10"),
+        )
+        for section, field, invalid_value in invalid_values:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmpdir:
+                input_dir = Path(tmpdir) / "input"
+                shutil.copytree(EXAMPLE_DIR, input_dir)
+                reconciliation_path = input_dir / "inventory_reconciliation.json"
+                reconciliation = json.loads(reconciliation_path.read_text(encoding="utf-8"))
+                reconciliation[section][field] = invalid_value
+                reconciliation_path.write_text(json.dumps(reconciliation), encoding="utf-8")
+
+                with self.assertRaisesRegex(ValueError, f"missing or invalid.*{field}"):
+                    load_analysis_sources(input_dir)
+
+    def test_clean_validation_result_stays_completed_without_a_validation_chart_warning(self):
+        sources = copy.deepcopy(load_sources(EXAMPLE_DIR))
+        reconciliation = sources["reconciliation"]
+        reconciliation["errors"] = []
+        reconciliation["warnings"] = []
+        reconciliation["amount_validation_errors"] = []
+        reconciliation["summary"].update(
+            amount_validation_errors=[],
+            amount_validation_error_count=0,
+            amount_validation_status="valid",
+            gross_profit_status="confirmed",
+            profit_status="confirmed",
+        )
+
+        output, workbook = self._create_workbook(sources)
+        execution_values = {
+            row[0].value: row[1].value
+            for row in workbook["실행정보"].iter_rows(min_row=2, max_col=2)
+        }
+
+        self.assertEqual(workbook["요약"]["B2"].value, "completed")
+        self.assertEqual(execution_values["결과 상태"], "completed")
+        self.assertEqual(execution_values["적용된 경고"], "없음")
+        self.assertEqual(len(workbook["요약"]._charts), 5)
+        self.assertTrue(output.exists())
+
     def test_reopen_failure_does_not_leave_a_partial_final_or_temporary_workbook(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "analysis_result.xlsx"
