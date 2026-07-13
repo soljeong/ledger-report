@@ -1,6 +1,13 @@
 report:
   title: "매입/매출 재고 분석 보고서"
   scope: "FIFO 요약, 공급가액 금액 대사, 주간 재고흐름, 주간 매출 공급가액, 원청별 FIFO 매출원가"
+  # 첫 장(요약·금액 대사)은 항상 고정한다.
+  # 아래 ID만 배열 순서대로 출력하며, 배열에서 빼면 해당 페이지를 제외한다.
+  pages:
+    - vat_settlement
+    - weekly_inventory_flow
+    - weekly_purchase_sales
+    - principal_margin
 
 plotly:
   include_plotlyjs: inline
