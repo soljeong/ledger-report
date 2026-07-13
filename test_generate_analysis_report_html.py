@@ -40,8 +40,6 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
             "기간 손익 흐름",
             "주간 재고금액 흐름",
             "원청별 매출과 원가",
-            "거래처별 매출 TOP 8",
-            "품목별 매출 TOP 8",
             "주요 품목 손익·재고",
             "매입처별 기간 매입 TOP 8",
             "9,460원",
@@ -70,6 +68,8 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertNotIn("평균원가", html)
         self.assertNotIn("최종매입가", html)
         self.assertNotIn('id="amount-balance-chart"', html)
+        self.assertNotIn("거래처별 매출 TOP 8", html)
+        self.assertNotIn("품목별 매출 TOP 8", html)
         self.assertNotIn("기말 장부재고수량", overview)
         self.assertIn("기초 재고금액", overview)
         expected_metrics = (
@@ -121,7 +121,6 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
 
         self.assertNotIn("2026-05-24", html)
         self.assertNotIn("Demo Buyer G", html)
-        self.assertIn("Demo Buyer Z", html)
 
     def test_fifo_amount_balance_identity_is_preserved_in_analysis_data(self):
         purchases = {

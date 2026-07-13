@@ -280,48 +280,6 @@ def weekly_inventory_flow_rows(
     ]
 
 
-def _top_sales_companies(records: list[dict[str, Any]], limit: int = 8) -> list[dict[str, Any]]:
-    grouped: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {
-            "name": None,
-            "row_count": 0,
-            "quantity": Decimal("0"),
-            "total_amount": Decimal("0"),
-        }
-    )
-    for row in records:
-        name = row.get("company") or "(거래처 없음)"
-        group = grouped[name]
-        group["name"] = name
-        group["row_count"] += 1
-        group["quantity"] += _base.decimal_amount(row.get("quantity")) or Decimal("0")
-        group["total_amount"] += _base.decimal_amount(row.get("supply_amount")) or Decimal("0")
-    return sorted(grouped.values(), key=lambda row: row["total_amount"], reverse=True)[:limit]
-
-
-def _top_sales_items(records: list[dict[str, Any]], limit: int = 8) -> list[dict[str, Any]]:
-    grouped: dict[Any, dict[str, Any]] = defaultdict(
-        lambda: {
-            "product_id": None,
-            "item_name": None,
-            "row_count": 0,
-            "quantity": Decimal("0"),
-            "total_amount": Decimal("0"),
-        }
-    )
-    for row in records:
-        key = row.get("product_id")
-        if key is None:
-            key = ("item", row.get("item_name") or "(품목 없음)")
-        group = grouped[key]
-        group["product_id"] = row.get("product_id")
-        group["item_name"] = row.get("item_name") or "(품목 없음)"
-        group["row_count"] += 1
-        group["quantity"] += _base.decimal_amount(row.get("quantity")) or Decimal("0")
-        group["total_amount"] += _base.decimal_amount(row.get("supply_amount")) or Decimal("0")
-    return sorted(grouped.values(), key=lambda row: row["total_amount"], reverse=True)[:limit]
-
-
 def _top_purchase_companies(records: list[dict[str, Any]], limit: int = 8) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
@@ -497,23 +455,6 @@ def _render_top_company_rows(rows: list[dict[str, Any]], label_key: str = "name"
     )
 
 
-def _render_top_item_rows(rows: list[dict[str, Any]]) -> str:
-    if not rows:
-        return _empty_row(5)
-    return "\n".join(
-        f"""
-        <tr>
-          <td class="rank">{index}</td>
-          <td>{escape(str(row.get('product_id') or '-'))}</td>
-          <th>{escape(str(row.get('item_name') or '-'))}</th>
-          <td class="num">{_base.number(row.get('quantity', 0))}</td>
-          <td class="money">{_base.money(_display_money(row.get('total_amount', 0)))}</td>
-        </tr>
-        """
-        for index, row in enumerate(rows, start=1)
-    )
-
-
 def _render_item_detail_rows(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return _empty_row(10)
@@ -589,8 +530,6 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         reconciliation_payload,
     )
     principal_rows = principal_rows_all[:8]
-    top_sales_companies = _top_sales_companies(period_sales, limit=8)
-    top_sales_items = _top_sales_items(period_sales, limit=8)
     top_purchase_companies = _top_purchase_companies(period_purchases, limit=8)
     item_rows_all = _item_detail_rows(reconciliation_payload)
     item_rows = item_rows_all[:12]
@@ -929,7 +868,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     <article class="report-page report-page--sales">
       <header class="page-head">
         <div><p class="eyebrow">SALES MIX</p><h2 id="principal-title">{escape(principal_spec['title'])}</h2></div>
-        <p>매출 공급가액 상위 원청과 거래처·품목별 공급가액 순위를 보여줍니다.</p>
+        <p>매출 공급가액 상위 원청의 매출원가와 매출총이익을 보여줍니다.</p>
       </header>
 
       <section class="section">
@@ -943,16 +882,6 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         </div>
       </section>
 
-      <section class="section two-column" aria-labelledby="sales-top-title">
-        <div class="panel">
-          <h3 id="sales-top-title">거래처별 매출 TOP 8</h3>
-          <div class="table-wrap"><table><thead><tr><th class="rank">순위</th><th>거래처</th><th class="num">건수</th><th class="money">공급가액</th></tr></thead><tbody>{_render_top_company_rows(top_sales_companies)}</tbody></table></div>
-        </div>
-        <div class="panel">
-          <h3>품목별 매출 TOP 8</h3>
-          <div class="table-wrap"><table><thead><tr><th class="rank">순위</th><th>ID</th><th>품목</th><th class="num">수량</th><th class="money">공급가액</th></tr></thead><tbody>{_render_top_item_rows(top_sales_items)}</tbody></table></div>
-        </div>
-      </section>
       <span class="page-number">04 / 05</span>
     </article>
 
