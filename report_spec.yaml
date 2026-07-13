@@ -1,6 +1,13 @@
 report:
   title: "매입/매출 재고 분석 보고서"
   scope: "기간 요약, 손익 흐름, 재고 흐름, 원청·거래처·품목별 매출 구성"
+  # 첫 장(개요)은 항상 고정한다.
+  # 아래 ID만 배열 순서대로 출력하며, 배열에서 빼면 해당 페이지를 제외한다.
+  pages:
+    - weekly_purchase_sales
+    - weekly_inventory_flow
+    - principal_margin
+    - item_detail
 
 plotly:
   include_plotlyjs: inline
@@ -19,7 +26,6 @@ charts:
       cost_amount:
         label: "매출원가"
         color: "#c47a23"
-
   weekly_inventory_flow:
     title: "주간 재고금액 흐름"
     x_axis_title: "주 시작일"

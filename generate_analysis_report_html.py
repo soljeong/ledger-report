@@ -8,6 +8,7 @@ from typing import Any
 
 import _generate_analysis_report_html_overview as _overview
 from _generate_analysis_report_html_overview import *  # noqa: F401,F403
+from src.report_page_layout import finalize_report_html
 
 
 PRINCIPAL_CHART_STYLE = r"""
@@ -309,7 +310,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     )[:8]
     principal_chart = render_principal_sales_chart(principal_rows)
     html = html.replace("  </style>", f"{PRINCIPAL_CHART_STYLE}\n  </style>", 1)
-    return _replace_principal_chart(html, principal_chart)
+    return finalize_report_html(_replace_principal_chart(html, principal_chart), spec)
 
 
 def generate_report(

@@ -598,15 +598,12 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     weekly_spec = spec["charts"]["weekly_purchase_sales"]
     inventory_spec = spec["charts"]["weekly_inventory_flow"]
     principal_spec = spec["charts"]["principal_margin"]
-    include_plotlyjs = _base.include_plotlyjs_option(
-        spec.get("plotly", {}).get("include_plotlyjs", "inline")
-    )
     weekly_chart = _base.figure_html(
         weekly_purchase_sales_figure(
             _chart_frame(weekly_profit, ("label", "sales_amount", "cost_amount")),
             weekly_spec,
         ),
-        include_plotlyjs=include_plotlyjs,
+        include_plotlyjs=False,
     )
     inventory_chart = _base.figure_html(
         weekly_inventory_flow_figure(pd.DataFrame(inventory_flow), inventory_spec),
