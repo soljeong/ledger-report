@@ -89,6 +89,8 @@ class ChartFigureTests(unittest.TestCase):
         self.assertGreaterEqual(figure.layout.margin.r, 120)
         self.assertIs(figure.data[0].cliponaxis, False)
         self.assertEqual(figure.layout.barmode, "overlay")
+        self.assertNotIn("상태", figure.data[0].hovertemplate)
+        self.assertIsNone(figure.data[0].customdata)
 
 
 if __name__ == "__main__":

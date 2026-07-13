@@ -37,10 +37,15 @@ class WeeklyInventoryFlowTests(unittest.TestCase):
         self.assertEqual(rows[0]["estimated_inventory_amount"], 1780)
         self.assertEqual(rows[-1]["week_start"], "2026-05-18")
         self.assertEqual(rows[-1]["estimated_inventory_amount"], 1510)
-        self.assertEqual(rows[-1]["estimated_inventory_amount"], sources["reconciliation"]["summary"]["ending_fifo_inventory_amount"])
+        self.assertEqual(
+            rows[-1]["estimated_inventory_amount"],
+            sources["reconciliation"]["summary"]["ending_fifo_inventory_amount"],
+        )
 
     def test_chart_uses_signed_bars_and_secondary_axis(self) -> None:
-        spec = load_report_spec(BASE_DIR / "report_spec.yaml")["charts"]["weekly_inventory_flow"]
+        spec = load_report_spec(BASE_DIR / "report_spec.yaml")["charts"][
+            "weekly_inventory_flow"
+        ]
         frame = pd.DataFrame(
             [
                 {
@@ -72,16 +77,20 @@ class WeeklyInventoryFlowTests(unittest.TestCase):
         self.assertEqual(figure.layout.yaxis2.overlaying, "y")
 
     def test_report_renders_inventory_as_dedicated_a4_page(self) -> None:
-        html = render_report_html(load_sources(EXAMPLE_DIR), load_report_spec(BASE_DIR / "report_spec.yaml"))
+        html = render_report_html(
+            load_sources(EXAMPLE_DIR),
+            load_report_spec(BASE_DIR / "report_spec.yaml"),
+        )
 
-        self.assertIn('class="report-page report-page--analysis"', html)
-        self.assertIn("주간 재고금액 흐름: 매입은 위, 출고는 아래", html)
-        self.assertIn("주간 출고 감소·주간 매출 공급가액", html)
-        self.assertIn("주말 추정 재고금액", html)
-        self.assertIn("5/4", html)
+        self.assertIn('class="report-page report-page--inventory"', html)
+        self.assertIn("주간 재고금액 흐름", html)
+        self.assertIn("매입 원가 유입, 출고 원가", html)
+        self.assertIn("주말 재고금액", html)
         self.assertIn("1,510", html)
-        self.assertIn("<th class=\"money\">매입 증가</th>", html)
-        self.assertIn("<th class=\"money\">출고 감소(FIFO 원가)</th>", html)
+        self.assertIn('<th class="money">매입 증가</th>', html)
+        self.assertIn('<th class="money">출고 감소(원가)</th>', html)
+        self.assertNotIn("오류", html)
+        self.assertNotIn("검증", html)
 
 
 if __name__ == "__main__":
