@@ -13,7 +13,14 @@ from unittest.mock import patch
 from openpyxl import load_workbook
 
 from generate_analysis_report_html_core import build_report_data, load_sources
-from generate_analysis_result_excel import SHEET_NAMES, export_workbook, generate_report, load_analysis_sources
+from generate_analysis_result_excel import (
+    FIFO_CALCULATION_COLUMNS,
+    SHEET_NAMES,
+    build_fifo_calculation_rows,
+    export_workbook,
+    generate_report,
+    load_analysis_sources,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -69,6 +76,124 @@ class GenerateAnalysisResultExcelTests(unittest.TestCase):
         self.assertIsNone(summary_values["매출총이익률"])
         self.assertEqual(workbook["손익분석"]["A1"].value, "손익 요약")
         self.assertTrue(output.exists())
+
+    def test_fifo_calculation_sheet_uses_the_required_structure_without_changing_charts(self):
+        output, workbook = self._create_workbook()
+        worksheet = workbook["FIFO계산"]
+
+        self.assertEqual(workbook.sheetnames.index("FIFO계산"), workbook.sheetnames.index("재고분석") + 1)
+        self.assertEqual(workbook.sheetnames.index("FIFO계산"), workbook.sheetnames.index("매출분석") - 1)
+        self.assertEqual([cell.value for cell in worksheet[1]], FIFO_CALCULATION_COLUMNS)
+        self.assertEqual(worksheet.freeze_panes, "A2")
+        self.assertEqual(worksheet.auto_filter.ref, f"A1:R{worksheet.max_row}")
+        self.assertEqual(sum(len(sheet._charts) for sheet in workbook.worksheets), 6)
+        self.assertFalse(
+            {"cost_status", "profit_status", "gross_profit_status", "amount_validation_status", "quantity_reconciliation_status"}
+            & set(FIFO_CALCULATION_COLUMNS)
+        )
+        self.assertTrue(output.exists())
+
+    def test_fifo_calculation_rows_flatten_existing_events_in_fifo_order(self):
+        sources = load_sources(EXAMPLE_DIR)
+        original_sources = copy.deepcopy(sources)
+        report_data = build_report_data(sources)
+        rows = build_fifo_calculation_rows(report_data)
+        reconciliation = sources["reconciliation"]
+
+        self.assertEqual(sources, original_sources)
+        self.assertEqual([set(row) for row in rows], [set(FIFO_CALCULATION_COLUMNS)] * len(rows))
+
+        completed_products = []
+        previous_product_id = object()
+        for row in rows:
+            if row["product_id"] != previous_product_id:
+                self.assertNotIn(row["product_id"], completed_products)
+                completed_products.append(row["product_id"])
+                previous_product_id = row["product_id"]
+        self.assertEqual(completed_products, sorted(completed_products, key=str))
+
+        same_day_rows = [
+            row for row in rows
+            if row["product_id"] == 1001 and row["transaction_date"] == "2026-05-10"
+        ]
+        self.assertEqual([row["transaction_type"] for row in same_day_rows], ["purchase", "sales", "sales"])
+        opening_purchase = next(row for row in rows if row["transaction_type"] == "purchase" and row["transaction_id"] == "2026-05-01|1|2")
+        self.assertEqual(opening_purchase["source_purchase_unit_cost"], 100)
+        self.assertIsNone(opening_purchase["fifo_cost_amount"])
+        self.assertIsNone(opening_purchase["allocated_quantity"])
+
+        layered_sale = [
+            row for row in rows
+            if row["transaction_type"] == "sales" and row["transaction_id"] == "2026-05-10|2|3"
+        ]
+        self.assertEqual([row["allocation_sequence"] for row in layered_sale], [1, 2])
+        self.assertEqual([row["allocated_quantity"] for row in layered_sale], [6, 2])
+        self.assertEqual(
+            [
+                (row["source_purchase_date"], row["source_purchase_voucher"], row["source_purchase_excel_row"], row["source_purchase_unit_cost"], row["fifo_cost_amount"])
+                for row in layered_sale
+            ],
+            [("2026-05-01", 1, 2, 100, 600), ("2026-05-10", 2, 3, 120, 240)],
+        )
+
+        backfill_rows = [row for row in rows if row["transaction_id"] == "2026-05-12|4|5" and row["transaction_type"] == "sales"]
+        self.assertEqual([row["allocation_type"] for row in backfill_rows], ["backfill", "backfill"])
+        self.assertEqual([row["source_purchase_date"] for row in backfill_rows], ["2026-05-21", "2026-05-22"])
+        self.assertEqual([row["allocated_quantity"] for row in backfill_rows], [6, 4])
+        self.assertEqual([row["fifo_cost_amount"] for row in backfill_rows], [1200, 880])
+        self.assertTrue(any(row["transaction_type"] == "purchase" and row["transaction_id"] == "2026-05-21|4|5" for row in rows))
+        self.assertFalse(any(row["product_id"] == 1004 for row in rows))
+
+        unallocated_rows = [row for row in rows if row["allocation_type"] == "unallocated"]
+        self.assertEqual(
+            unallocated_rows,
+            [
+                {
+                    **{column: None for column in FIFO_CALCULATION_COLUMNS},
+                    "product_id": 1007,
+                    "item_name": "Unconfirmed Part",
+                    "specification": "G",
+                    "transaction_date": "2026-05-14",
+                    "transaction_type": "sales",
+                    "transaction_id": "2026-05-14|10|11",
+                    "voucher": 10,
+                    "excel_row": 11,
+                    "transaction_quantity": 5,
+                    "allocation_sequence": 1,
+                    "allocation_type": "unallocated",
+                    "unallocated_quantity": 5,
+                }
+            ],
+        )
+
+        purchase_cancellation = [row for row in rows if row["transaction_type"] == "purchase_cancellation"]
+        sales_cancellation = [row for row in rows if row["transaction_type"] == "sales_cancellation"]
+        self.assertEqual([(row["allocated_quantity"], row["fifo_cost_amount"]) for row in purchase_cancellation], [(-3, -180)])
+        self.assertEqual([(row["allocated_quantity"], row["fifo_cost_amount"]) for row in sales_cancellation], [(-3, -240), (-2, -160)])
+
+        cancellation_first_sources = copy.deepcopy(sources)
+        purchase_events = cancellation_first_sources["reconciliation"]["purchase_cost_events"]
+        cancellation_event = next(event for event in purchase_events if event["event_type"] == "purchase_cancellation")
+        purchase_events.remove(cancellation_event)
+        purchase_events.insert(0, cancellation_event)
+        cancellation_first_rows = build_fifo_calculation_rows(build_report_data(cancellation_first_sources))
+        self.assertTrue(any(row["transaction_type"] == "purchase_cancellation" for row in cancellation_first_rows))
+
+        period_start = reconciliation["metadata"]["period_start"]
+        period_end = reconciliation["metadata"]["period_end"]
+        displayed_sales_cost = sum(
+            row["fifo_cost_amount"] or 0
+            for row in rows
+            if row["transaction_type"] in {"sales", "sales_cancellation"}
+            and period_start <= row["transaction_date"] <= period_end
+        )
+        published_sales_cost = sum(
+            event["cost_amount"]
+            for event in reconciliation["sales_cost_events"]
+            if period_start <= event["date"] <= period_end
+        )
+        self.assertEqual(displayed_sales_cost, published_sales_cost)
+        self.assertEqual(displayed_sales_cost, reconciliation["summary"]["fifo_sales_cost_amount"])
 
     def test_writes_no_formulas_or_external_links_and_uses_native_internal_charts(self):
         sources = copy.deepcopy(load_sources(EXAMPLE_DIR))

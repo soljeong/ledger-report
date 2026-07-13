@@ -21,19 +21,20 @@ from typing import Any, Iterable
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, LineChart, Reference
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 import generate_analysis_report_html_core as report_core
 from generate_analysis_report_html import weekly_inventory_flow_rows
+from src.fifo_inventory import event_sort_key
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT_DIR = BASE_DIR / "private_intermediate"
 DEFAULT_OUTPUT = BASE_DIR / "private_reports" / "analysis_result.xlsx"
 DEFAULT_SPEC = BASE_DIR / "report_spec.yaml"
-SHEET_NAMES = ["요약", "매입", "매출", "재고", "전표메타", "손익분석", "재고분석", "매출분석", "검증결과", "실행정보"]
+SHEET_NAMES = ["요약", "매입", "매출", "재고", "전표메타", "손익분석", "재고분석", "FIFO계산", "매출분석", "검증결과", "실행정보"]
 
 HEADER_FILL = PatternFill("solid", fgColor="D9EAF7")
 SECTION_FILL = PatternFill("solid", fgColor="EAF4E1")
@@ -41,6 +42,28 @@ WARNING_FILL = PatternFill("solid", fgColor="FFF2CC")
 ERROR_FILL = PatternFill("solid", fgColor="FCE4D6")
 HEADER_FONT = Font(bold=True)
 STATUS_FONT = Font(bold=True)
+FIFO_PRODUCT_BOUNDARY = Side(style="thin", color="9EADBA")
+
+FIFO_CALCULATION_COLUMNS = [
+    "product_id",
+    "item_name",
+    "specification",
+    "transaction_date",
+    "transaction_type",
+    "transaction_id",
+    "voucher",
+    "excel_row",
+    "transaction_quantity",
+    "allocation_sequence",
+    "allocated_quantity",
+    "source_purchase_date",
+    "source_purchase_voucher",
+    "source_purchase_excel_row",
+    "source_purchase_unit_cost",
+    "fifo_cost_amount",
+    "allocation_type",
+    "unallocated_quantity",
+]
 
 REQUIRED_INPUTS = {
     "purchase": ["purchase.json", f"{report_core.LEGACY_PREFIX}purchase.json"],
@@ -402,6 +425,333 @@ def _write_summary_sheet(workbook: Workbook, report_data: dict[str, Any], valida
 def _write_metadata_sheet(workbook: Workbook, report_data: dict[str, Any]) -> Worksheet:
     records = [{"source": "sales", **record} for record in report_data["records"]["sales_voucher_metadata"]]
     return _write_record_sheet(workbook, "전표메타", records, "sales_voucher_metadata")
+
+
+def _transaction_id(row: dict[str, Any]) -> str:
+    """Return the public FIFO transaction identifier without deriving new facts."""
+    transaction_id = row.get("transaction_id") or row.get("sale_id")
+    if transaction_id:
+        return str(transaction_id)
+    return f"{row.get('date')}|{row.get('voucher')}|{row.get('excel_row')}"
+
+
+def _transaction_reference(row: dict[str, Any]) -> tuple[str, str, str]:
+    """Identify a published transaction or cost layer by its source trace fields."""
+    return (str(row.get("date")), str(row.get("voucher")), str(row.get("excel_row")))
+
+
+def _source_records_by_transaction(records: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Index parsed display fields; no FIFO allocation is inferred from them."""
+    return {_transaction_id(record): record for record in records}
+
+
+def _source_record(event: dict[str, Any], source_records: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    return source_records.get(_transaction_id(event), {})
+
+
+def _row_number(value: Any) -> Any:
+    """Keep public numeric values numeric when a cancellation needs its existing sign."""
+    if isinstance(value, str):
+        try:
+            number = Decimal(value)
+        except Exception:
+            return value
+        return int(number) if number == number.to_integral_value() else number
+    return value
+
+
+def _signed_cancellation_value(value: Any, transaction_quantity: Any) -> Any:
+    """Express an existing restored allocation with the cancellation event sign.
+
+    This only applies the already-published transaction sign; it never derives
+    a quantity or amount from a unit cost.
+    """
+    value = _row_number(value)
+    quantity = _row_number(transaction_quantity)
+    if value is None:
+        return None
+    if isinstance(value, (int, float, Decimal)) and isinstance(quantity, (int, float, Decimal)) and quantity < 0:
+        return -value if value > 0 else value
+    return value
+
+
+def _allocation_value(allocation: dict[str, Any], *names: str) -> Any:
+    for name in names:
+        if name in allocation:
+            return allocation[name]
+    return None
+
+
+def _fifo_base_row(event: dict[str, Any], source: dict[str, Any], transaction_type: str) -> dict[str, Any]:
+    """Build the transaction fields shared by all flattened display rows."""
+    return {
+        "product_id": event.get("product_id", source.get("product_id")),
+        "item_name": source.get("item_name", event.get("item_name")),
+        "specification": source.get("specification", event.get("specification")),
+        "transaction_date": event.get("date", source.get("date")),
+        "transaction_type": transaction_type,
+        "transaction_id": _transaction_id(event),
+        "voucher": event.get("voucher", source.get("voucher")),
+        "excel_row": event.get("excel_row", source.get("excel_row")),
+        "transaction_quantity": event.get("quantity", source.get("quantity")),
+        "allocation_sequence": None,
+        "allocated_quantity": None,
+        "source_purchase_date": None,
+        "source_purchase_voucher": None,
+        "source_purchase_excel_row": None,
+        "source_purchase_unit_cost": None,
+        "fifo_cost_amount": None,
+        "allocation_type": None,
+        "unallocated_quantity": None,
+    }
+
+
+def _allocation_row(
+    base: dict[str, Any],
+    allocation: dict[str, Any],
+    sequence: int,
+    allocation_type: str,
+    *,
+    cancellation: bool = False,
+) -> dict[str, Any]:
+    """Flatten one public cost allocation into one Excel display row."""
+    row = dict(base)
+    row.update(
+        allocation_sequence=sequence,
+        allocated_quantity=_allocation_value(allocation, "purchase_quantity", "quantity"),
+        source_purchase_date=allocation.get("purchase_date"),
+        source_purchase_voucher=allocation.get("purchase_voucher"),
+        source_purchase_excel_row=allocation.get("purchase_excel_row"),
+        source_purchase_unit_cost=allocation.get("unit_cost"),
+        fifo_cost_amount=_allocation_value(allocation, "cost_amount", "amount"),
+        allocation_type=allocation_type,
+    )
+    if cancellation:
+        row["allocated_quantity"] = _signed_cancellation_value(row["allocated_quantity"], row["transaction_quantity"])
+        row["fifo_cost_amount"] = _signed_cancellation_value(row["fifo_cost_amount"], row["transaction_quantity"])
+    return row
+
+
+def _cancellation_allocations(event: dict[str, Any]) -> list[dict[str, Any]]:
+    """Use only the public cancellation references, including restored sale layers."""
+    direct = event.get("allocations")
+    if isinstance(direct, list):
+        return [allocation for allocation in direct if isinstance(allocation, dict)]
+    allocations: list[dict[str, Any]] = []
+    for sale in event.get("sales", []):
+        if isinstance(sale, dict):
+            allocations.extend(
+                allocation
+                for allocation in sale.get("restored_allocations", [])
+                if isinstance(allocation, dict)
+            )
+    return allocations
+
+
+def _cancellation_events_by_reference(reconciliation: dict[str, Any]) -> dict[tuple[str, str, str], dict[str, Any]]:
+    return {
+        _transaction_reference(event): event
+        for event in reconciliation.get("cancellation_events", [])
+        if isinstance(event, dict)
+    }
+
+
+def _backfill_purchase_references(reconciliation: dict[str, Any]) -> set[tuple[str, str, str]]:
+    """Identify later purchases from existing backfill allocations, never dates alone."""
+    references: set[tuple[str, str, str]] = set()
+    allocation_groups: list[Any] = [reconciliation.get("backfill_allocations", [])]
+    allocation_groups.extend(
+        sale.get("allocations", [])
+        for sale in reconciliation.get("sales_allocations", [])
+        if isinstance(sale, dict)
+    )
+    for allocations in allocation_groups:
+        for allocation in allocations or []:
+            if not isinstance(allocation, dict) or not (
+                allocation.get("backfilled") or allocation.get("allocation_source") == "backfill"
+            ):
+                continue
+            references.add(
+                (
+                    str(allocation.get("purchase_date")),
+                    str(allocation.get("purchase_voucher")),
+                    str(allocation.get("purchase_excel_row")),
+                )
+            )
+    return references
+
+
+def _fifo_event_is_in_display_range(
+    event: dict[str, Any],
+    kind: str,
+    period_end: str | None,
+    backfill_purchases: set[tuple[str, str, str]],
+) -> bool:
+    """Apply the FIFO report range using event references, not a guessed queue."""
+    event_date = event.get("date")
+    if not period_end or not event_date or str(event_date) <= period_end:
+        return True
+    return kind == "purchase" and event.get("event_type") == "purchase" and _transaction_reference(event) in backfill_purchases
+
+
+def _fifo_product_sort_key(product_id: Any) -> str:
+    # The FIFO engine publishes product-level result rows with this key.
+    return str(product_id)
+
+
+def _sale_unconfirmed_quantity(event: dict[str, Any], sales_allocations: dict[str, dict[str, Any]]) -> Any:
+    allocation = sales_allocations.get(_transaction_id(event), {})
+    if "unconfirmed_quantity" in allocation:
+        return allocation.get("unconfirmed_quantity")
+    return event.get("current_unconfirmed_quantity", event.get("unconfirmed_quantity_delta"))
+
+
+def build_fifo_calculation_rows(report_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flatten published FIFO events for the Excel-only `FIFO계산` worksheet.
+
+    This is deliberately a projection: it neither rebuilds layers nor derives
+    cost from quantities and unit prices.  Parsed source records only provide
+    user-facing item labels and the unit cost of a normal purchase row.
+    """
+    reconciliation = report_data["reconciliation"]
+    metadata = reconciliation.get("metadata", {})
+    period_end = metadata.get("period_end")
+    purchase_records = _source_records_by_transaction(report_data["records"]["purchase"])
+    sales_records = _source_records_by_transaction(report_data["records"]["sales"])
+    sales_allocations = {
+        _transaction_id(sale): sale
+        for sale in reconciliation.get("sales_allocations", [])
+        if isinstance(sale, dict)
+    }
+    cancellation_events = _cancellation_events_by_reference(reconciliation)
+    backfill_purchases = _backfill_purchase_references(reconciliation)
+
+    transaction_rows: list[tuple[tuple[Any, ...], list[dict[str, Any]]]] = []
+    seen_cancellations: set[tuple[str, str, str]] = set()
+
+    for event in reconciliation.get("purchase_cost_events", []):
+        if not isinstance(event, dict) or not _fifo_event_is_in_display_range(event, "purchase", period_end, backfill_purchases):
+            continue
+        event_type = event.get("event_type")
+        source = _source_record(event, purchase_records)
+        if event_type == "purchase":
+            row = _fifo_base_row(event, source, "purchase")
+            row["source_purchase_unit_cost"] = source.get("unit_price")
+            rows = [row]
+        elif event_type == "purchase_cancellation":
+            cancellation = cancellation_events.get(_transaction_reference(event), event)
+            seen_cancellations.add(_transaction_reference(event))
+            base = _fifo_base_row(event, source, "purchase_cancellation")
+            allocations = _cancellation_allocations(cancellation)
+            rows = [
+                _allocation_row(base, allocation, sequence, "purchase_cancellation", cancellation=True)
+                for sequence, allocation in enumerate(allocations, start=1)
+            ]
+            if not rows:
+                row = dict(base)
+                row.update(fifo_cost_amount=event.get("cost_amount"), allocation_type="purchase_cancellation")
+                rows = [row]
+        else:
+            continue
+        transaction_rows.append(((_fifo_product_sort_key(rows[0]["product_id"]), *event_sort_key(event, "purchase")), rows))
+
+    for event in reconciliation.get("sales_cost_events", []):
+        if not isinstance(event, dict) or not _fifo_event_is_in_display_range(event, "sales", period_end, backfill_purchases):
+            continue
+        event_type = event.get("event_type")
+        source = _source_record(event, sales_records)
+        if event_type == "sale":
+            base = _fifo_base_row(event, source, "sales")
+            allocations = event.get("cost_allocations", [])
+            rows = [
+                _allocation_row(
+                    base,
+                    allocation,
+                    sequence,
+                    "backfill" if allocation.get("backfilled") or allocation.get("allocation_source") == "backfill" else "period_fifo",
+                )
+                for sequence, allocation in enumerate(allocations, start=1)
+                if isinstance(allocation, dict)
+            ]
+            unconfirmed_quantity = _sale_unconfirmed_quantity(event, sales_allocations)
+            if unconfirmed_quantity not in (None, 0, Decimal("0"), "0", "0.0"):
+                row = dict(base)
+                row.update(
+                    allocation_sequence=len(rows) + 1,
+                    allocation_type="unallocated",
+                    unallocated_quantity=unconfirmed_quantity,
+                )
+                rows.append(row)
+            if not rows:
+                # A zero-effective sale has no allocation fact to display;
+                # its separate cancellation event remains in the transaction flow.
+                continue
+        elif event_type == "sale_cancellation":
+            cancellation = cancellation_events.get(_transaction_reference(event), event)
+            seen_cancellations.add(_transaction_reference(event))
+            base = _fifo_base_row(event, source, "sales_cancellation")
+            allocations = _cancellation_allocations(cancellation)
+            rows = [
+                _allocation_row(base, allocation, sequence, "sales_cancellation", cancellation=True)
+                for sequence, allocation in enumerate(allocations, start=1)
+            ]
+            if not rows:
+                row = dict(base)
+                row.update(fifo_cost_amount=event.get("cost_amount"), allocation_type="sales_cancellation")
+                rows = [row]
+        else:
+            continue
+        transaction_rows.append(((_fifo_product_sort_key(rows[0]["product_id"]), *event_sort_key(event, "sales")), rows))
+
+    # Modern reconciliation payloads publish cancellation cost events.  This
+    # fallback keeps older public payloads reviewable when only their explicit
+    # cancellation event is available; it still consumes no inferred layers.
+    for reference, cancellation in cancellation_events.items():
+        if reference in seen_cancellations or not _fifo_event_is_in_display_range(cancellation, "purchase" if cancellation.get("type") == "purchase_cancellation" else "sales", period_end, backfill_purchases):
+            continue
+        is_purchase = cancellation.get("type") == "purchase_cancellation"
+        source = _source_record(cancellation, purchase_records if is_purchase else sales_records)
+        source_quantity = source.get("quantity")
+        event = {
+            **cancellation,
+            "event_type": cancellation.get("type"),
+            "transaction_id": _transaction_id(cancellation),
+            "quantity": source_quantity if source_quantity is not None else -_row_number(cancellation.get("requested_quantity")),
+        }
+        transaction_type = "purchase_cancellation" if is_purchase else "sales_cancellation"
+        base = _fifo_base_row(event, source, transaction_type)
+        rows = [
+            _allocation_row(base, allocation, sequence, transaction_type, cancellation=True)
+            for sequence, allocation in enumerate(_cancellation_allocations(cancellation), start=1)
+        ]
+        if not rows:
+            rows = [base]
+        transaction_rows.append(((_fifo_product_sort_key(base["product_id"]), *event_sort_key(event, "purchase" if is_purchase else "sales")), rows))
+
+    transaction_rows.sort(key=lambda item: item[0])
+    return [row for _, rows in transaction_rows for row in rows]
+
+
+def _write_fifo_calculation_sheet(workbook: Workbook, report_data: dict[str, Any]) -> Worksheet:
+    ws = _new_sheet(workbook, "FIFO계산")
+    rows = build_fifo_calculation_rows(report_data)
+    header_row, end_row, columns = _write_table(
+        ws,
+        rows,
+        FIFO_CALCULATION_COLUMNS,
+        include_empty_columns=True,
+    )
+    _set_tabular_sheet_options(ws, header_row, end_row, columns)
+
+    product_column = columns.index("product_id") + 1
+    previous_product_id = None
+    for row_number in range(header_row + 1, end_row + 1):
+        product_id = ws.cell(row_number, product_column).value
+        if previous_product_id is not None and product_id != previous_product_id:
+            for cell in ws[row_number]:
+                cell.border = Border(top=FIFO_PRODUCT_BOUNDARY)
+        previous_product_id = product_id
+    return ws
 
 
 def _write_profit_sheet(workbook: Workbook, report_data: dict[str, Any]) -> tuple[Worksheet, tuple[int, int, list[str]]]:
@@ -793,6 +1143,7 @@ def export_workbook(
     _write_metadata_sheet(workbook, report_data)
     profit_ws, profit_table = _write_profit_sheet(workbook, report_data)
     inventory_ws, inventory_flow_table = _write_inventory_sheet(workbook, report_data, inventory_flow)
+    _write_fifo_calculation_sheet(workbook, report_data)
     sales_ws, company_table, item_table = _write_sales_sheet(workbook, report_data)
     validation_ws, validation_table = _write_validation_sheet(workbook, validation_rows)
     _write_execution_sheet(workbook, report_data, required_paths or {}, optional_paths or {})
