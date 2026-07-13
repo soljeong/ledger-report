@@ -262,23 +262,19 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     spec = spec or _base.load_report_spec()
     base_spec = copy.deepcopy(spec)
     base_spec.setdefault("plotly", {})["include_plotlyjs"] = False
-    html = _base.render_report_html(sources, base_spec)
+    report_data = _base.build_report_data(sources, spec)
+    html = _base.render_report_html(sources, base_spec, report_data=report_data)
 
-    purchase_meta = sources["purchase"]["metadata"]
-    sales_meta = sources["sales"]["metadata"]
-    inventory_meta = sources["inventory"]["metadata"]
-    purchase_records = sources["purchase"]["records"]
-    sales_records = sources["sales"]["records"]
-    inventory_records = sources["inventory"]["records"]
-    reconciliation_payload = sources["reconciliation"]
-    reconciliation = reconciliation_payload["summary"]
-    period_start = reconciliation_payload.get("metadata", {}).get("period_start")
-    period_end = reconciliation_payload.get("metadata", {}).get("period_end")
-    def in_period(row: dict[str, Any]) -> bool:
-        row_date = _base.safe_iso_date(row.get("date"))
-        return row_date is not None and (not period_start or not period_end or period_start <= row_date.isoformat() <= period_end)
-    period_purchases = [row for row in purchase_records if in_period(row)]
-    period_sales = [row for row in sales_records if in_period(row)]
+    purchase_meta = report_data["metadata"]["purchase"]
+    sales_meta = report_data["metadata"]["sales"]
+    inventory_meta = report_data["metadata"]["inventory"]
+    purchase_records = report_data["records"]["purchase"]
+    sales_records = report_data["records"]["sales"]
+    inventory_records = report_data["records"]["inventory"]
+    period_purchases = report_data["records"]["period_purchase"]
+    period_sales = report_data["records"]["period_sales"]
+    reconciliation_payload = report_data["reconciliation"]
+    reconciliation = report_data["summary"]
 
     summary_rows_html = "\n".join(
         [

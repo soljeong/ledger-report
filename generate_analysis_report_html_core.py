@@ -170,7 +170,7 @@ def top_sales_by_company(records: list[dict[str, Any]], limit: int = 10) -> list
     for row in records:
         company = row.get("company") or "(거래처 없음)"
         grouped[company]["row_count"] += 1
-        grouped[company]["quantity"] += row.get("quantity") or 0
+        grouped[company]["quantity"] += decimal_amount(row.get("quantity")) or Decimal("0")
         supply_amount = decimal_amount(row.get("supply_amount"))
         if supply_amount is not None:
             grouped[company]["total_amount"] += supply_amount
@@ -196,7 +196,7 @@ def top_sales_by_item(records: list[dict[str, Any]], limit: int = 10) -> list[di
         grouped[key]["product_id"] = row.get("product_id")
         grouped[key]["item_name"] = row.get("item_name")
         grouped[key]["row_count"] += 1
-        grouped[key]["quantity"] += row.get("quantity") or 0
+        grouped[key]["quantity"] += decimal_amount(row.get("quantity")) or Decimal("0")
         supply_amount = decimal_amount(row.get("supply_amount"))
         if supply_amount is not None:
             grouped[key]["total_amount"] += supply_amount
@@ -916,17 +916,138 @@ def render_item_top_rows(rows: list[dict[str, Any]]) -> str:
     )
 
 
-def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = None) -> str:
+def build_report_data(sources: dict[str, Any], spec: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build the presentation data shared by HTML and spreadsheet outputs.
+
+    This layer deliberately reuses already-published reconciliation values and
+    existing display aggregations.  It does not reopen source workbooks or
+    calculate FIFO, VAT, or reconciliation results.
+    """
+    purchase = sources["purchase"]
+    sales = sources["sales"]
+    inventory = sources["inventory"]
+    reconciliation_payload = sources["reconciliation"]
+    reconciliation = reconciliation_payload["summary"]
+    reconciliation_metadata = reconciliation_payload.get("metadata", {})
+    period_start = reconciliation_metadata.get("period_start")
+    period_end = reconciliation_metadata.get("period_end")
+
+    def in_period(row: dict[str, Any]) -> bool:
+        row_date = safe_iso_date(row.get("date"))
+        return row_date is not None and (
+            not period_start or not period_end or period_start <= row_date.isoformat() <= period_end
+        )
+
+    purchase_records = purchase["records"]
+    sales_records = sales["records"]
+    inventory_records = inventory["records"]
+    warnings: list[dict[str, Any]] = []
+    if "sales_voucher_metadata" not in sources:
+        warnings.append(
+            {
+                "code": "sales_voucher_metadata_missing",
+                "description": "매출 전표 메타데이터가 제공되지 않아 원청 분석은 '(원청 없음)'으로 표시된다.",
+            }
+        )
+    if reconciliation.get("gross_profit_status") != "confirmed":
+        warnings.append(
+            {
+                "code": "gross_profit_not_confirmed",
+                "description": "매출총이익 상태가 확정이 아니므로 이익률을 확정값으로 표시하지 않는다.",
+            }
+        )
+
+    errors = list(reconciliation_payload.get("errors", []))
+    source_warnings = list(reconciliation_payload.get("warnings", []))
+    weekly_margin = weekly_purchase_sales_amounts(
+        purchase_records,
+        sales_records,
+        inventory_records,
+        reconciliation_payload,
+    )
+    principal_margin = principal_sales_cost_rows(
+        sales_records,
+        purchase_records,
+        sources.get("sales_voucher_metadata"),
+        reconciliation_payload,
+    )
+    sales_supply_amount = reconciliation.get("period_sales_supply_amount", reconciliation.get("sales_amount"))
+    gross_profit = reconciliation.get("gross_profit")
+    gross_profit_rate = None
+    if reconciliation.get("gross_profit_status") == "confirmed":
+        sales_decimal = decimal_amount(sales_supply_amount)
+        profit_decimal = decimal_amount(gross_profit)
+        if sales_decimal not in (None, Decimal("0")) and profit_decimal is not None:
+            gross_profit_rate = float(profit_decimal / sales_decimal)
+
+    return {
+        "sources": sources,
+        "spec": spec or {},
+        "period": {
+            "start": period_start,
+            "end": period_end,
+            "label": f"{period_start} ~ {period_end}" if period_start and period_end else period_label(purchase["metadata"], sales["metadata"]),
+            "inventory_date": reconciliation_metadata.get("inventory_date"),
+        },
+        "records": {
+            "purchase": purchase_records,
+            "sales": sales_records,
+            "inventory": inventory_records,
+            "period_purchase": [row for row in purchase_records if in_period(row)],
+            "period_sales": [row for row in sales_records if in_period(row)],
+            "sales_voucher_metadata": (sources.get("sales_voucher_metadata") or {}).get("records", []),
+        },
+        "metadata": {
+            "purchase": purchase["metadata"],
+            "sales": sales["metadata"],
+            "inventory": inventory["metadata"],
+            "reconciliation": reconciliation_metadata,
+            "sales_voucher_metadata": (sources.get("sales_voucher_metadata") or {}).get("metadata"),
+        },
+        "reconciliation": reconciliation_payload,
+        "summary": reconciliation,
+        "kpis": {
+            "sales_supply_amount": sales_supply_amount,
+            "fifo_sales_cost_amount": reconciliation.get("fifo_sales_cost_amount"),
+            "gross_profit": gross_profit,
+            "gross_profit_rate": gross_profit_rate,
+            "gross_profit_status": reconciliation.get("gross_profit_status"),
+            "ending_inventory_quantity": reconciliation.get("ending_signed_stock_quantity"),
+            "ending_inventory_amount": reconciliation.get(
+                "inventory_amount_at_fifo", reconciliation.get("ending_fifo_inventory_amount")
+            ),
+        },
+        "analysis": {
+            "weekly_margin": weekly_margin,
+            "principal_margin": principal_margin,
+            "top_sales_by_company": top_sales_by_company([row for row in sales_records if in_period(row)]),
+            "top_sales_by_item": top_sales_by_item([row for row in sales_records if in_period(row)]),
+            "inventory_rows": list(reconciliation_payload.get("rows", [])),
+        },
+        "validation": {
+            "errors": errors,
+            "warnings": source_warnings + warnings,
+        },
+        "status": "completed_with_warnings" if errors or source_warnings or warnings else "completed",
+    }
+
+
+def render_report_html(
+    sources: dict[str, Any],
+    spec: dict[str, Any] | None = None,
+    report_data: dict[str, Any] | None = None,
+) -> str:
     if spec is None:
         spec = load_report_spec()
+    report_data = report_data or build_report_data(sources, spec)
     report_spec = spec.get("report", {})
     report_title = report_spec.get("title", "매입/매출 재고 분석 보고서")
     report_scope = report_spec.get("scope", "요약, 금액 대사, 주간 그래프, 원청별 마진, 매출 TOP")
-    purchase_meta = sources["purchase"]["metadata"]
-    sales_meta = sources["sales"]["metadata"]
-    inventory_meta = sources["inventory"]["metadata"]
-    reconciliation_payload = sources["reconciliation"]
-    reconciliation = reconciliation_payload["summary"]
+    purchase_meta = report_data["metadata"]["purchase"]
+    sales_meta = report_data["metadata"]["sales"]
+    inventory_meta = report_data["metadata"]["inventory"]
+    reconciliation_payload = report_data["reconciliation"]
+    reconciliation = report_data["summary"]
 
     period = period_label(purchase_meta, sales_meta)
     generated = date.today().isoformat()
@@ -938,12 +1059,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     # structurally searching generated HTML when a negative value makes the
     # chart renderer return an explanatory note instead of a wrapper element.
     amount_balance_chart = "<!-- AMOUNT_BALANCE_CHART -->"
-    weekly_amounts = weekly_purchase_sales_amounts(
-        sources["purchase"]["records"],
-        sources["sales"]["records"],
-        sources["inventory"]["records"],
-        reconciliation_payload,
-    )
+    weekly_amounts = report_data["analysis"]["weekly_margin"]
     include_plotlyjs = include_plotlyjs_option(spec.get("plotly", {}).get("include_plotlyjs", "inline"))
     weekly_chart_spec = spec["charts"]["weekly_purchase_sales"]
     principal_chart_spec = spec["charts"]["principal_margin"]
@@ -952,12 +1068,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         include_plotlyjs=include_plotlyjs,
     )
     weekly_table_rows = render_weekly_table_rows(weekly_amounts)
-    principal_rows = principal_sales_cost_rows(
-        sources["sales"]["records"],
-        sources["purchase"]["records"],
-        sources.get("sales_voucher_metadata"),
-        reconciliation_payload,
-    )
+    principal_rows = report_data["analysis"]["principal_margin"]
     principal_chart = figure_html(
         principal_margin_figure(pd.DataFrame(principal_rows), principal_chart_spec),
         include_plotlyjs=False,

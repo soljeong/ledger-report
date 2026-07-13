@@ -46,6 +46,37 @@ python -m venv .venv
 
 `report_spec.yaml`에서 보고서 제목, Plotly 포함 방식, 차트 제목, 축 이름, 표시 단위를 조정합니다. 기본값은 Plotly JS를 HTML에 inline 포함해서 오프라인으로 열 수 있게 합니다.
 
+## Analysis Result Excel
+
+파싱·정규화 JSON과 재고대사 계산 JSON만으로 열람용 `analysis_result.xlsx`를 새로 생성할 수 있습니다. 이 생성기는 ERP 원본 Excel이나 HTML을 다시 열지 않고, 외부 Excel 링크·데이터 연결·Excel 수식도 만들지 않습니다.
+
+```bash
+.venv/bin/python generate_analysis_result_excel.py \
+  --input-dir examples/dummy_json \
+  --output /tmp/analysis_result.xlsx
+```
+
+필수 입력은 `purchase.json`, `sales.json`, `inventory.json`, `inventory_reconciliation.json`입니다. `sales_voucher_metadata.json`은 선택 입력으로, 없으면 `전표메타` 시트는 빈 표로 남기고 원청 분석은 `(원청 없음)`으로 표시하며 결과 상태를 `completed_with_warnings`로 기록합니다.
+
+HTML과 Excel은 `build_report_data()`를 함께 사용합니다. 따라서 분석 기간, 매출 공급가액, FIFO 매출원가, 매출총이익, 주간 손익, 원청·거래처·품목별 표시 집계를 각각 따로 계산하지 않습니다. FIFO·부가세·재고대사는 `inventory_reconciliation.json`의 계산 결과를 표시할 뿐 재구현하지 않습니다.
+
+생성 순서는 다음과 같습니다.
+
+1. `요약`
+2. `매입`
+3. `매출`
+4. `재고`
+5. `전표메타`
+6. `손익분석`
+7. `재고분석`
+8. `매출분석`
+9. `검증결과`
+10. `실행정보`
+
+`요약`에는 실제 Excel 차트 객체로 기간별 매입 원가·매출 공급가액, 손익, 재고금액, 상위 거래처·품목 매출, 검증 유형별 건수를 표시합니다. 각 차트는 해당 분석 시트의 셀 범위만 참조하며 PNG/HTML 캡처를 사용하지 않습니다.
+
+대사 불일치, 미확정 원가·수량, 개별 행 오류, 선택 전표 메타 누락과 차트용 데이터 부족은 비치명적입니다. 파일을 계속 만들고 `completed_with_warnings`, `검증결과`, `실행정보`에 남깁니다. 필수 JSON 누락·읽기 실패·핵심 계산 결과(분석 기간·손익·기말 FIFO 재고) 누락·출력 실패만 치명적 오류입니다. 저장은 같은 디렉터리의 임시 `.xlsx`를 재열어 검증한 뒤 원자적으로 최종 경로와 교체합니다. 피벗·슬라이서, 대용량 행 분할, 원본 ERP 연결, Excel 수식 재계산, HTML 시각화의 완전한 복제는 현재 범위에 포함하지 않습니다.
+
 ## 수량 대사·기초재고 계약
 
 장부금액, 장부수량, FIFO 원가는 서로 독립된 스트림입니다. 날짜·`product_id`·숫자 수량이 모두 유효한 거래만 장부수량과 FIFO에 쓰고, FIFO 매입 원가에는 추가로 숫자 `unit_price`가 필요합니다. 따라서 단가가 빠진 매입은 장부수량에는 남지만 FIFO 원가층에는 들어가지 않습니다.
@@ -70,6 +101,7 @@ python -m venv .venv
 .venv/bin/python export_sales_voucher_excel.py
 .venv/bin/python parse_sales_voucher_metadata.py
 .venv/bin/python generate_analysis_report_html.py
+.venv/bin/python generate_analysis_result_excel.py
 .venv/bin/python capture_html_a4.py
 ```
 
