@@ -1,493 +1,333 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import copy
+from decimal import Decimal
 from html import escape
 from pathlib import Path
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
-import pandas as pd
-
-import generate_analysis_report_html_core as _base
-from generate_analysis_report_html_core import *  # noqa: F401,F403
-from src.charts import weekly_inventory_flow_figure
+import _generate_analysis_report_html_overview as _overview
+from _generate_analysis_report_html_overview import *  # noqa: F401,F403
 from src.report_page_layout import finalize_report_html
 
 
-def _numeric_frame(records: list[dict[str, Any]], columns: tuple[str, ...]) -> pd.DataFrame:
-    frame = pd.DataFrame(records).copy()
-    for column in columns:
-        if column not in frame:
-            frame[column] = 0
-        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0)
-    return frame
-
-
-def _display_money(value: Any) -> int:
-    return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-
-
-def _unique_value_count(records: list[dict[str, Any]], key: str) -> int:
-    return len(
-        {
-            str(value).strip()
-            for row in records
-            if (value := row.get(key)) not in (None, "") and str(value).strip()
-        }
-    )
-
-
-def _replace_once(text: str, old: str, new: str, label: str) -> str:
-    if old not in text:
-        raise RuntimeError(f"{label} replacement marker not found")
-    return text.replace(old, new, 1)
-
-
-def _replace_between(
-    text: str,
-    start_marker: str,
-    end_marker: str,
-    replacement: str,
-    *,
-    start_at: int = 0,
-    label: str,
-) -> str:
-    start = text.find(start_marker, start_at)
-    if start < 0:
-        raise RuntimeError(f"{label} start marker not found")
-    content_start = start + len(start_marker)
-    end = text.find(end_marker, content_start)
-    if end < 0:
-        raise RuntimeError(f"{label} end marker not found")
-    return text[:content_start] + replacement + text[end:]
-
-
-def render_amount_balance_chart(
-    opening_amount: Any,
-    purchase_amount: Any,
-    sales_amount: Any,
-    inventory_amount: Any,
-    backfill_amount: Any,
-    prior_shortage_settlement_amount: Any,
-    gross_profit: Any,
-) -> str:
-    """Render the FIFO identity only when its Decimal components match exactly."""
-    values = [
-        _base.decimal_amount(value)
-        for value in (opening_amount, purchase_amount, sales_amount, inventory_amount, backfill_amount, prior_shortage_settlement_amount, gross_profit)
-    ]
-    if any(value is None for value in values):
-        return '<div class="balance-chart-empty" role="note">금액 밸런스 exact 구성요소가 없어 차트를 표시할 수 없다.</div>'
-    opening, purchase, sales, inventory, backfill, prior_shortage, profit = values
-    left_total = sales + inventory + prior_shortage
-    right_total = opening + purchase + backfill + profit
-    if any(value < 0 for value in values):
-        return '<div class="balance-chart-empty" role="note">원가 미확정·오류 또는 음수 이익이 있어 금액 밸런스 차트는 확정값으로 표시하지 않는다.</div>'
-    if left_total != right_total:
-        return f'<div class="balance-chart-empty" role="note">금액 밸런스 불일치: 왼쪽 {_base.money(_base.rounded_amount(left_total))}원 / 오른쪽 {_base.money(_base.rounded_amount(right_total))}원</div>'
-    total = left_total or 1
-    def segments(x: int, entries: list[tuple[str, Decimal]], color: str) -> str:
-        y, result = 302.0, []
-        for label, value in entries:
-            height = float(value / total * Decimal("220"))
-            y -= height
-            result.append(f'<rect x="{x}" y="{y:.1f}" width="190" height="{height:.1f}" rx="3" fill="{color}" opacity=".82"></rect><text x="{x + 95}" y="{y + height / 2:.1f}" text-anchor="middle">{escape(label)} {_base.money(_base.rounded_amount(value))}원</text>')
-        return "".join(result)
-    return f'''<div class="chart-wrap balance-chart-wrap" aria-label="금액 대사 밸런스 블록 차트">
-      <svg id="amount-balance-chart" viewBox="0 0 980 410" role="img"><title>FIFO 금액 밸런스 차트</title><desc>매출과 종료일 FIFO 재고는 기초재고, 기간 순매입원가, 후속 소급배정원가 및 매출총이익의 합계와 같다.</desc>
-      <text x="490" y="34" text-anchor="middle">양쪽 exact 합계 {_base.money(_base.rounded_amount(left_total))}원</text>
-      {segments(170, [('매출 공급가액', sales), ('종료일 재고', inventory), ('이전기간 부족 보충', prior_shortage)], '#2f6f7e')}
-      {segments(620, [('기초재고', opening), ('기간 순매입', purchase), ('후속 소급배정', backfill), ('매출총이익', profit)], '#c47a23')}
-      <text x="265" y="350" text-anchor="middle">매출 공급가액 + 재고 + 이전기간 보충</text><text x="715" y="350" text-anchor="middle">기초재고 + 매입 + 소급배정 + 이익</text></svg></div>'''
-
-
-def weekly_inventory_flow_rows(
-    purchase_records: list[dict[str, Any]],
-    sales_records: list[dict[str, Any]],
-    inventory_records: list[dict[str, Any]],
-    reconciliation: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    """Build the flow in Decimal; display rounding happens only at the end."""
-    metadata = (reconciliation or {}).get("metadata", {})
-    period_start, period_end = metadata.get("period_start"), metadata.get("period_end")
-
-    def valid_period_date(row: dict[str, Any]) -> Any:
-        value = _base.safe_iso_date(row.get("date"))
-        if value is None or (period_start and period_end and not (period_start <= value.isoformat() <= period_end)):
-            return None
-        return value
-
-    dates = [value for row in [*purchase_records, *sales_records] if (value := valid_period_date(row))]
-    if not dates:
-        return []
-    daily: dict[Any, dict[str, Decimal]] = {}
-    def day(value: Any) -> dict[str, Decimal]:
-        return daily.setdefault(value, {"purchase": Decimal("0"), "sales": Decimal("0"), "outbound": Decimal("0"), "inventory_delta": Decimal("0")})
-
-    validation_states = (reconciliation or {}).get("transaction_validations", [])
-    valid_supply_keys = {
-        _base.error_key(state)
-        for state in validation_states
-        if state.get("source") == "sales" and state.get("supply_amount_valid")
-        and valid_period_date(state)
+PRINCIPAL_CHART_STYLE = r"""
+    .principal-stack-chart {
+      margin: 0;
+      padding: 14px 16px 10px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
     }
-    for row in sales_records:
-        value = valid_period_date(row)
-        amount = _base.decimal_amount(row.get("supply_amount"))
-        # Revenue is its own stream: FIFO or quantity errors are reported in
-        # their own statuses and must not discard a valid supply amount.
-        if value and amount is not None and (not validation_states or _base.error_key(row, "sales") in valid_supply_keys):
-            day(value)["sales"] += amount
+    .principal-stack-chart__legend {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 11.5px;
+    }
+    .principal-stack-chart__legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .principal-stack-chart__legend i {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+    }
+    .principal-stack-chart__legend .cost { background: #c47a23; }
+    .principal-stack-chart__legend .margin { background: #2f6f7e; }
+    .principal-stack-chart__legend-note { color: #98a2b3; }
+    .principal-stack-chart__rows {
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+    .principal-stack-chart__row,
+    .principal-stack-chart__axis {
+      display: grid;
+      grid-template-columns: 108px minmax(0, 1fr) 116px;
+      align-items: center;
+      gap: 12px;
+    }
+    .principal-stack-chart__name {
+      overflow: hidden;
+      color: var(--ink);
+      font-size: 11.5px;
+      font-weight: 700;
+      text-align: right;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .principal-stack-chart__track {
+      position: relative;
+      height: 28px;
+      background:
+        linear-gradient(to right, transparent calc(25% - .5px), #edf0f3 calc(25% - .5px), #edf0f3 calc(25% + .5px), transparent calc(25% + .5px)),
+        linear-gradient(to right, transparent calc(50% - .5px), #edf0f3 calc(50% - .5px), #edf0f3 calc(50% + .5px), transparent calc(50% + .5px)),
+        linear-gradient(to right, transparent calc(75% - .5px), #edf0f3 calc(75% - .5px), #edf0f3 calc(75% + .5px), transparent calc(75% + .5px));
+      border-left: 1px solid #edf0f3;
+      border-right: 1px solid #edf0f3;
+    }
+    .principal-stack-chart__bar {
+      position: absolute;
+      top: 3px;
+      left: 0;
+      display: flex;
+      height: 22px;
+      overflow: hidden;
+      border-radius: 5px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, .10);
+    }
+    .principal-stack-chart__bar--negative {
+      overflow: visible;
+      background: #c47a23;
+    }
+    .principal-stack-chart__bar--negative::after {
+      position: absolute;
+      top: -2px;
+      right: -3px;
+      width: 6px;
+      height: 26px;
+      border-radius: 2px;
+      background: #b42318;
+      content: "";
+    }
+    .principal-stack-chart__cost,
+    .principal-stack-chart__margin {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 9.5px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .principal-stack-chart__cost { background: #c47a23; }
+    .principal-stack-chart__margin { background: #2f6f7e; }
+    .principal-stack-chart__empty {
+      position: absolute;
+      top: 5px;
+      left: 0;
+      width: 3px;
+      height: 18px;
+      border-radius: 2px;
+      background: #cfd6de;
+    }
+    .principal-stack-chart__value {
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      white-space: nowrap;
+    }
+    .principal-stack-chart__value strong {
+      color: var(--ink);
+      font-size: 11.5px;
+      font-variant-numeric: tabular-nums;
+    }
+    .principal-stack-chart__value span {
+      color: var(--teal);
+      font-size: 10.5px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+    .principal-stack-chart__value .negative { color: #b42318; }
+    .principal-stack-chart__axis {
+      margin-top: 2px;
+      color: #98a2b3;
+      font-size: 9.5px;
+      font-variant-numeric: tabular-nums;
+    }
+    .principal-stack-chart__ticks {
+      position: relative;
+      height: 18px;
+    }
+    .principal-stack-chart__ticks span {
+      position: absolute;
+      top: 1px;
+      transform: translateX(-50%);
+    }
+    .principal-stack-chart__ticks span:first-child { transform: none; }
+    .principal-stack-chart__ticks span:last-child { transform: translateX(-100%); }
+    .principal-stack-chart__unit { align-self: start; }
+    .principal-stack-chart__caption {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 10px;
+    }
+"""
 
-    inventory_events = (reconciliation or {}).get("inventory_cost_events", [])
-    if inventory_events:
-        for event in inventory_events:
-            value = valid_period_date(event)
-            if value is None:
-                continue
-            amount = _base.event_cost_amount(event)
-            if event.get("event_type") in {"purchase", "purchase_cancellation"}:
-                day(value)["purchase"] += amount
-            else:
-                day(value)["outbound"] -= amount
-                day(value)["inventory_delta"] += amount
-    else:
-        for row in purchase_records:
-            value = valid_period_date(row)
-            if value:
-                day(value)["purchase"] += (_base.decimal_amount(row.get("quantity")) or Decimal("0")) * (_base.decimal_amount(row.get("unit_price")) or Decimal("0"))
-        for event in (reconciliation or {}).get("sales_cost_events", []):
-            value = valid_period_date(event)
-            if value:
-                amount = _base.event_cost_amount(event)
-                if event.get("event_type") == "sale_cancellation":
-                    amount = -amount
-                day(value)["outbound"] += amount
-                day(value)["inventory_delta"] -= amount
 
-    weekly: dict[Any, dict[str, Decimal]] = {}
-    running = _base.decimal_amount((reconciliation or {}).get("summary", {}).get("opening_stock_amount")) or Decimal("0")
-    current = min(dates)
-    while current <= max(dates):
-        values = day(current)
-        net_change = values["purchase"] + values["inventory_delta"]
-        running += net_change
-        start = _base.week_start(current.isoformat())
-        group = weekly.setdefault(start, {"purchase": Decimal("0"), "sales": Decimal("0"), "outbound": Decimal("0"), "net_change": Decimal("0"), "inventory": running})
-        group["purchase"] += values["purchase"]
-        group["sales"] += values["sales"]
-        group["outbound"] += values["outbound"]
-        group["net_change"] += net_change
-        group["inventory"] = running
-        current += _base.timedelta(days=1)
-    return [
-        {"week_start": start.isoformat(), "label": f"{start.month}/{start.day}", "purchase_increase": _display_money(row["purchase"]), "sales_amount": _display_money(row["sales"]), "outbound_cost_estimate": _display_money(row["outbound"]), "net_change": _display_money(row["net_change"]), "estimated_inventory_amount": _display_money(row["inventory"])}
-        for start, row in sorted(weekly.items())
-    ]
+def _principal_decimal(row: dict[str, Any], *names: str) -> Decimal:
+    for name in names:
+        value = row.get(name)
+        if value is None:
+            continue
+        amount = _overview._impl._base.decimal_amount(value)
+        if amount is not None:
+            return amount
+    return Decimal("0")
 
 
-def render_weekly_inventory_flow_table_rows(rows: list[dict[str, Any]]) -> str:
-    return "\n".join(
-        f"""
-          <tr>
-            <th>{escape(row['label'])}</th>
-            <td class="money">{_base.money(row['purchase_increase'])}</td>
-            <td class="money">{_base.money(row['outbound_cost_estimate'])}</td>
-            <td class="money">{_base.money(row['net_change'])}</td>
-            <td class="money">{_base.money(row['estimated_inventory_amount'])}</td>
-          </tr>
-        """
-        for row in rows
+def _principal_money(value: Decimal) -> str:
+    return _overview._impl._base.money(_overview._impl._base.rounded_amount(value))
+
+
+def _principal_rate(margin: Decimal, sales: Decimal) -> str:
+    if sales == 0:
+        return "-"
+    return f"{float(margin / sales * Decimal('100')):.1f}%"
+
+
+def render_principal_sales_chart(rows: list[dict[str, Any]]) -> str:
+    """Render revenue as a horizontal bar split into cost and gross margin."""
+    prepared: list[dict[str, Any]] = []
+    for row in rows:
+        sales = _principal_decimal(row, "sales_amount_exact", "sales_amount")
+        cost = _principal_decimal(row, "cost_amount_exact", "cost_amount")
+        margin = sales - cost
+        prepared.append(
+            {
+                "principal": str(row.get("principal") or "(원청 없음)"),
+                "sales": sales,
+                "cost": cost,
+                "margin": margin,
+            }
+        )
+
+    max_sales = max((row["sales"] for row in prepared if row["sales"] > 0), default=Decimal("1"))
+    tick_values = [max_sales * Decimal(index) / Decimal("4") for index in range(5)]
+    row_html: list[str] = []
+
+    for row in prepared:
+        sales = row["sales"]
+        cost = row["cost"]
+        margin = row["margin"]
+        bar_width = max(Decimal("0"), min(Decimal("100"), sales / max_sales * Decimal("100")))
+        rate = _principal_rate(margin, sales)
+        rate_class = "negative" if margin < 0 else ""
+        value_html = (
+            f'<div class="principal-stack-chart__value">'
+            f'<strong>{escape(_principal_money(sales))}</strong>'
+            f'<span class="{rate_class}">{escape(rate)}</span>'
+            f"</div>"
+        )
+
+        if sales <= 0:
+            bar_html = '<span class="principal-stack-chart__empty" aria-hidden="true"></span>'
+        elif cost >= 0 and margin >= 0:
+            cost_width = cost / sales * Decimal("100")
+            margin_width = margin / sales * Decimal("100")
+            show_cost = cost / max_sales >= Decimal("0.11")
+            show_margin = margin / max_sales >= Decimal("0.075")
+            cost_label = escape(_principal_money(cost)) if show_cost else ""
+            margin_label = escape(_principal_money(margin)) if show_margin else ""
+            bar_html = (
+                f'<div class="principal-stack-chart__bar" style="width:{float(bar_width):.2f}%">'
+                f'<div class="principal-stack-chart__cost" style="width:{float(cost_width):.2f}%" '
+                f'title="매출원가 {_principal_money(cost)}원">{cost_label}</div>'
+                f'<div class="principal-stack-chart__margin" style="width:{float(margin_width):.2f}%" '
+                f'title="매출총이익 {_principal_money(margin)}원">{margin_label}</div>'
+                f"</div>"
+            )
+        else:
+            bar_html = (
+                f'<div class="principal-stack-chart__bar principal-stack-chart__bar--negative" '
+                f'style="width:{float(bar_width):.2f}%" '
+                f'title="매출 공급가액 {_principal_money(sales)}원 · 매출원가 {_principal_money(cost)}원 · '
+                f'매출총이익 {_principal_money(margin)}원"></div>'
+            )
+
+        row_html.append(
+            f"""
+            <div class="principal-stack-chart__row">
+              <div class="principal-stack-chart__name" title="{escape(row['principal'])}">{escape(row['principal'])}</div>
+              <div class="principal-stack-chart__track">{bar_html}</div>
+              {value_html}
+            </div>
+            """
+        )
+
+    ticks = "".join(
+        f'<span style="left:{index * 25}%">{escape(_principal_money(value))}</span>'
+        for index, value in enumerate(tick_values)
+    )
+    empty_note = (
+        '<p class="principal-stack-chart__caption">표시할 원청별 매출 데이터가 없습니다.</p>'
+        if not prepared
+        else '<p class="principal-stack-chart__caption">막대 길이는 매출 공급가액이며, 내부 구간은 매출원가와 매출총이익입니다. 음수 마진은 우측 값과 막대 끝 표시로 구분합니다.</p>'
     )
 
-
-def render_problem_item_rows(payload: dict[str, Any]) -> str:
-    error_codes: dict[Any, list[str]] = {}
-    for issue in [*payload.get("errors", []), *payload.get("warnings", [])]:
-        error_codes.setdefault(issue.get("product_id"), []).append(str(issue.get("code") or "오류"))
-    problems = [
-        row for row in payload.get("rows", [])
-        if row.get("cost_status") in {"backfilled", "unconfirmed", "error"}
-        or row.get("amount_validation_status") != "valid"
-        or row.get("ledger_quantity_validation_status", "valid") != "valid"
-        or row.get("inventory_validation_status", "valid") != "valid"
-        or row.get("quantity_reconciliation_validation_status", "valid") != "valid"
-        or row.get("quantity_reconciliation_status") != "match"
-        or row.get("product_id") in error_codes
-    ]
-    if not problems:
-        return '<tr><td colspan="15">없음</td></tr>'
-    return "\n".join(
-        "<tr>"
-        f"<td>{escape(str(row.get('product_id') if row.get('product_id') is not None else '-'))}</td>"
-        f"<td>{escape(str(row.get('item_name') or '-'))}</td>"
-        f"<td><code>{escape(str(row.get('cost_status') or '-'))}</code></td>"
-        f"<td><code>{escape(str(row.get('ledger_quantity_validation_status') or '-'))}</code></td>"
-        f"<td><code>{escape(str(row.get('inventory_validation_status') or '-'))}</code></td>"
-        f"<td><code>{escape(str(row.get('quantity_reconciliation_status') or '-'))}</code></td>"
-        f"<td><code>{escape(str(row.get('amount_validation_status') or '-'))}</code></td>"
-        f"<td class=\"money\">{_base.number(row.get('opening_unconfirmed_quantity') or 0)}</td>"
-        f"<td class=\"money\">{_base.number(row.get('period_unconfirmed_quantity') or 0)}</td>"
-        f"<td class=\"money\">{_base.number(row.get('all_unconfirmed_quantity', row.get('unconfirmed_quantity')) or 0)}</td>"
-        f"<td class=\"money\">{_base.number(row.get('ending_negative_stock_quantity') or 0)}</td>"
-        f"<td class=\"money\">{_base.number(row.get('inventory_book_quantity') or 0)}</td>"
-        f"<td class=\"money\">{_base.number(row.get('inventory_sheet_quantity')) if row.get('inventory_sheet_quantity') is not None else '-'}</td>"
-        f"<td class=\"money\">{_base.number(row.get('inventory_quantity_difference')) if row.get('inventory_quantity_difference') is not None else '-'}</td>"
-        f"<td>{escape(', '.join(error_codes.get(row.get('product_id'), [])) or '-')}</td>"
-        "</tr>"
-        for row in problems
-    )
+    return f"""
+        <div class="principal-stack-chart" id="principal-stacked-sales-chart" aria-label="원청별 매출 공급가액과 원가 및 매출총이익">
+          <div class="principal-stack-chart__legend">
+            <span><i class="cost"></i>매출원가</span>
+            <span><i class="margin"></i>매출총이익</span>
+            <span class="principal-stack-chart__legend-note">막대 합계 = 매출 공급가액</span>
+          </div>
+          <div class="principal-stack-chart__rows">
+            {''.join(row_html)}
+            <div class="principal-stack-chart__axis">
+              <div></div>
+              <div class="principal-stack-chart__ticks">{ticks}</div>
+              <div class="principal-stack-chart__unit">금액(원)</div>
+            </div>
+          </div>
+          {empty_note}
+        </div>
+    """
 
 
-def render_transaction_error_rows(payload: dict[str, Any]) -> str:
-    errors = [*payload.get("errors", []), *payload.get("warnings", [])]
-    if not errors:
-        return '<tr><td colspan="8">없음</td></tr>'
-    return "\n".join(
-        "<tr>"
-        f"<td>{escape(str(error.get('source') or '-'))}</td>"
-        f"<td>{escape(str(error.get('date') or '-'))}</td>"
-        f"<td>{escape(str(error.get('voucher') or '-'))}</td>"
-        f"<td>{escape(str(error.get('excel_row') or '-'))}</td>"
-        f"<td>{escape(str(error.get('product_id') or '-'))}</td>"
-        f"<td><code>{escape(str(error.get('code') or '-'))}</code></td>"
-        f"<td>{escape(', '.join(name.removeprefix('affects_') for name in ('affects_quantity', 'affects_fifo_cost', 'affects_revenue', 'affects_vat', 'affects_inventory_reconciliation') if error.get(name)) or '-')}</td>"
-        f"<td>{escape(str(error.get('stock_quantity', error.get('supply_amount', error.get('total_amount', '-')))))}</td>"
-        "</tr>"
-        for error in errors
-    )
+def _replace_principal_chart(html: str, chart: str) -> str:
+    title_position = html.find('id="principal-title"')
+    if title_position < 0:
+        return html
+    section_marker = '      <section class="section">'
+    section_position = html.find(section_marker, title_position)
+    if section_position < 0:
+        return html
+    table_marker = '        <div class="table-wrap" style="margin-top: 12px;">'
+    table_position = html.find(table_marker, section_position)
+    if table_position < 0:
+        return html
+    content_start = section_position + len(section_marker)
+    return html[:content_start] + f"\n{chart}\n\n" + html[table_position:]
 
 
 def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = None) -> str:
-    spec = spec or _base.load_report_spec()
-    base_spec = copy.deepcopy(spec)
-    base_spec.setdefault("plotly", {})["include_plotlyjs"] = False
-    report_data = _base.build_report_data(sources, spec)
-    html = _base.render_report_html(sources, base_spec, report_data=report_data)
-
-    purchase_meta = report_data["metadata"]["purchase"]
-    sales_meta = report_data["metadata"]["sales"]
-    inventory_meta = report_data["metadata"]["inventory"]
-    purchase_records = report_data["records"]["purchase"]
-    sales_records = report_data["records"]["sales"]
-    inventory_records = report_data["records"]["inventory"]
-    period_purchases = report_data["records"]["period_purchase"]
-    period_sales = report_data["records"]["period_sales"]
-    reconciliation_payload = report_data["reconciliation"]
-    reconciliation = report_data["summary"]
-
-    summary_rows_html = "\n".join(
-        [
-            _base.summary_row("분석 기간", reconciliation_payload.get("metadata", {}).get("period_start", _base.period_label(purchase_meta, sales_meta)) + " ~ " + reconciliation_payload.get("metadata", {}).get("period_end", "")),
-            _base.summary_row("재고 기준일", reconciliation_payload.get("metadata", {}).get("inventory_date", "-")),
-            _base.summary_row("입력 데이터 최종 거래일", reconciliation_payload.get("metadata", {}).get("input_data_last_transaction_date", "-")),
-            _base.summary_row(
-                "후속 원가보충 최종 매입일",
-                reconciliation_payload.get("metadata", {}).get("backfill_last_purchase_date") or "없음",
-            ),
-            _base.summary_row(
-                "거래 규모",
-                f"매입 상세 {_base.number(len(period_purchases))}건 / 매출 상세 {_base.number(len(period_sales))}건",
-            ),
-            _base.summary_row(
-                "분석 대상",
-                f"매입처 {_base.number(_unique_value_count(period_purchases, 'company'))}곳 / "
-                f"매출처 {_base.number(_unique_value_count(period_sales, 'company'))}곳",
-                f"재고 품목 {_base.number(inventory_meta['unique_product_ids'])}개",
-            ),
-        ]
-    )
-    html = _replace_between(
-        html,
-        '        <dl class="summary-list">\n',
-        "        </dl>",
-        f"          {summary_rows_html}\n",
-        label="summary list",
-    )
-
-    purchase_amount = reconciliation.get("period_purchase_cost_amount", reconciliation["purchase_amount"])
-    sales_amount = reconciliation.get("period_sales_supply_amount", reconciliation["sales_amount"])
-    inventory_amount = reconciliation.get("inventory_amount_at_fifo", reconciliation.get("ending_fifo_inventory_amount", 0))
-    reconciliation_remainder = reconciliation.get("gross_profit", 0)
-    opening_amount = reconciliation.get("opening_stock_amount", 0)
-    backfill_amount = reconciliation.get("post_period_backfill_amount", reconciliation.get("backfilled_amount", 0))
-    prior_shortage_settlement_amount = reconciliation.get("prior_period_shortage_settlement_amount", 0)
-    exact_opening_amount = reconciliation.get("opening_stock_amount_exact", opening_amount)
-    exact_purchase_amount = reconciliation.get("period_purchase_cost_amount_exact", purchase_amount)
-    exact_sales_amount = reconciliation.get("period_sales_supply_amount_exact", sales_amount)
-    exact_inventory_amount = reconciliation.get("ending_fifo_inventory_amount_exact", inventory_amount)
-    exact_backfill_amount = reconciliation.get("period_backfilled_amount_exact", backfill_amount)
-    exact_prior_shortage_settlement_amount = reconciliation.get("prior_period_shortage_settlement_amount_exact", prior_shortage_settlement_amount)
-    exact_gross_profit = reconciliation.get("gross_profit_exact", reconciliation_remainder)
-    fifo_sales_cost = reconciliation.get("fifo_sales_cost_amount", 0)
-    gross_profit_label = "매출총이익" if reconciliation.get("gross_profit_status") == "confirmed" else "잠정 매출총이익"
-    vat_settlement = reconciliation.get("vat_settlement_amount", 0)
-    vat_error = reconciliation.get("vat_settlement_status") == "validation_error"
-    vat_direction_label = "납부 예상액" if vat_settlement > 0 else ("환급 예상액" if vat_settlement < 0 else "정산금")
-    vat_label = f"{'잠정 ' if vat_error else ''}부가세 {vat_direction_label}"
-    status_rows = "".join(
-        f"<li><code>{escape(status)}</code>: {_base.number(count)}개 품목</li>"
-        for status, count in reconciliation.get("cost_status_counts", {}).items()
-    )
-    reconciliation_rows = "".join(
-        f"<li>{escape(status)}: {_base.number(count)}개</li>"
-        for status, count in reconciliation.get("reconciliation_status_counts", {}).items()
-    )
-    problem_rows = render_problem_item_rows(reconciliation_payload)
-    transaction_error_rows = render_transaction_error_rows(reconciliation_payload)
-
-    amount_balance_chart = render_amount_balance_chart(
-        exact_opening_amount,
-        exact_purchase_amount,
-        exact_sales_amount,
-        exact_inventory_amount,
-        exact_backfill_amount,
-        exact_prior_shortage_settlement_amount,
-        exact_gross_profit,
-    )
-    if reconciliation.get("gross_profit_status") != "confirmed":
-        amount_balance_chart += '<p class="section-note">손익 상태가 확정이 아니므로, 차트는 exact 금액 항등식 일치 여부만 나타내며 확정 손익을 뜻하지 않는다.</p>'
-    html = _replace_once(html, "<!-- AMOUNT_BALANCE_CHART -->", amount_balance_chart, "amount balance chart")
-
-    amount_rows = [
-        ("기초재고금액", "분석 시작일 직전 FIFO 잔여 원가층", _base.money(opening_amount)),
-        ("기간 순매입원가", "실제 매입·매입취소 원가 이벤트 합계", _base.money(purchase_amount)),
-        ("후속 매입 소급배정원가", "종료일 이후 매입으로 확정된 현재 기간 미확정 출고 원가", _base.money(backfill_amount)),
-        ("이전 기간 미확정 출고 보충원가", "기간 매입이 분석 시작일 이전 부족분에 배정된 금액", _base.money(prior_shortage_settlement_amount)),
-        ("매출 공급가액", "기간 내 매출의 공급가액 합계 (부가세 제외)", _base.money(sales_amount)),
-        ("FIFO 매출원가", "각 매출에 실제 배정된 FIFO 원가층 합계", _base.money(fifo_sales_cost)),
-        ("FIFO 재고금액", "분석 종료일 정상 잔여 원가층 합계", _base.money(inventory_amount)),
-        (
-            gross_profit_label,
-            "매출 공급가액 - FIFO 매출원가",
-            _base.money(reconciliation_remainder),
-        ),
-    ]
-    amount_table = "\n".join(
-        f"""
-          <tr>
-            <th>{escape(label)}</th>
-            <td>{escape(description)}</td>
-            <td class="money">{escape(value)}</td>
-          </tr>
-        """
-        for label, description, value in amount_rows
-    )
-    amount_table_start = html.index('<table class="amount-table">')
-    html = _replace_between(
-        html,
-        "          <tbody>\n",
-        "          </tbody>",
-        f"            {amount_table}\n",
-        start_at=amount_table_start,
-        label="amount table body",
-    )
-    html = _replace_once(
-        html,
-        '<p class="formula">FIFO 매출원가와 FIFO 잔여 원가층을 사용했다. 재고 시트의 평균원가·최종매입가는 계산에 사용하지 않는다.</p>',
-        '<p class="formula">매출총이익은 매출 공급가액 - FIFO 매출원가다. FIFO 재고금액은 분석 종료일 정상 잔여 원가층 합계다.</p>\n'
-        '        <p class="section-note">후속 매입은 종료일 이전 미확정 출고를 확정하는 데만 사용하며 종료일 재고금액에는 포함하지 않는다.</p>',
-        "amount reconciliation formula",
-    )
-    vat_section = f"""
-    <article class="report-page report-page--vat">
-      <section class="page-panel" aria-labelledby="vat-settlement-title">
-          <h3 id="vat-settlement-title">부가세 정산</h3>
-          <p class="section-note">매출총이익은 부가세 제외 손익 지표다. 부가세 정산 후 잔여금액은 현금 관점의 참고값이며 손익이 아니다.</p>
-          <table class="amount-table"><tbody>
-            <tr><th>매출 공급가액</th><td class="money">{_base.money(reconciliation.get('period_sales_supply_amount', 0))}</td></tr>
-            <tr><th>매출 부가세</th><td class="money">{_base.money(reconciliation.get('period_sales_vat_amount', 0))}</td></tr>
-            <tr><th>매출 합계금액</th><td class="money">{_base.money(reconciliation.get('period_sales_total_amount', 0))}</td></tr>
-            <tr><th>매입 공급가액</th><td class="money">{_base.money(reconciliation.get('period_purchase_supply_amount', 0))}</td></tr>
-            <tr><th>매입 부가세</th><td class="money">{_base.money(reconciliation.get('period_purchase_vat_amount', 0))}</td></tr>
-            <tr><th>매입 합계금액</th><td class="money">{_base.money(reconciliation.get('period_purchase_total_amount', 0))}</td></tr>
-            <tr><th>{escape(vat_label)}</th><td class="money">{_base.money(abs(vat_settlement))}</td></tr>
-            <tr><th>{'부가세 정산 후 잔여금액' if reconciliation.get('post_vat_reference_status') == 'confirmed' else ('검증 필요' if reconciliation.get('post_vat_reference_status') == 'error' else '잠정 참고값')}</th><td class="money">{_base.money(reconciliation.get('post_vat_reference_amount', 0))}</td></tr>
-          </tbody></table>
-          <p class="section-note">거래금액 검증 오류 {escape(_base.number(reconciliation.get('amount_validation_error_count', 0)))}건 · 정산 상태 <code>{escape(str(reconciliation.get('vat_settlement_status', '-')))}</code></p>
-      </section>
-    </article>
-    """
-    html = _replace_once(html, "    <!-- REPORT_EXTRA_PAGES -->", f"      {vat_section}\n    <!-- REPORT_EXTRA_PAGES -->", "VAT section insertion")
-
-    chart_spec = spec["charts"]["weekly_inventory_flow"]
-    rows = weekly_inventory_flow_rows(
-        purchase_records,
-        sales_records,
-        inventory_records,
-        reconciliation_payload,
-    )
-    chart = _base.figure_html(
-        weekly_inventory_flow_figure(pd.DataFrame(rows), chart_spec),
-        include_plotlyjs=False,
-    )
-    inserted = f"""
-    <article class="report-page report-page--analysis">
-      <section class="page-panel" aria-labelledby="inventory-flow-title">
-        <h2 id="inventory-flow-title">{escape(chart_spec['title'])}</h2>
-        <p class="section-note">매입은 매입단가 기준 원가로 증가, 출고는 매출별 FIFO 배정원가로 감소시켰다.</p>
-        <p class="section-note">주 시작일 기준으로 묶었고, 막대는 주간 매입 증가·주간 출고 감소·주간 매출 공급가액, 선은 주말 추정 재고금액이다.</p>
-        <p class="section-note">표시 단위: {escape(chart_spec.get('unit_label', '백만원'))}</p>
-        <div class="legend">
-          <span><i class="purchase-chip"></i>{escape(chart_spec["series"]["purchase_increase"]["label"])}</span>
-          <span><i class="outbound-chip"></i>{escape(chart_spec["series"]["outbound_cost_estimate"]["label"])}</span>
-          <span><i class="revenue-chip"></i>{escape(chart_spec["series"]["sales_amount"]["label"])}</span>
-          <span><i class="inventory-chip"></i>{escape(chart_spec["series"]["estimated_inventory_amount"]["label"])}</span>
-        </div>
-        {chart}
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>주 시작일</th>
-                <th class="money">매입 증가</th>
-                <th class="money">출고 감소(FIFO 원가)</th>
-                <th class="money">순증감</th>
-                <th class="money">추정 재고금액</th>
-              </tr>
-            </thead>
-            <tbody>{render_weekly_inventory_flow_table_rows(rows)}</tbody>
-          </table>
-        </div>
-        <section aria-labelledby="fifo-status-title">
-          <h3 id="fifo-status-title">FIFO 원가 상태</h3>
-          <ul>{status_rows}</ul>
-          <p class="section-note">기초 미확정 출고 {escape(_base.number(reconciliation.get('opening_unconfirmed_quantity', 0)))}개 · 기간 미확정 출고 {escape(_base.number(reconciliation.get('period_unconfirmed_quantity', 0)))}개 · 전체 미확정 출고 {escape(_base.number(reconciliation.get('all_unconfirmed_quantity', reconciliation.get('unconfirmed_quantity', 0))))}개 · 오류 {_base.number(reconciliation.get('error_count', 0))}건</p>
-        </section>
-        <section aria-labelledby="stock-reconciliation-title">
-          <h3 id="stock-reconciliation-title">재고 기준일 수량 대사</h3>
-          <p class="section-note">장부상 계산수량과 재고 시트의 stock_quantity만 비교했다. 재고 시트 단가는 사용하지 않았다.</p>
-          <ul>{reconciliation_rows}</ul>
-          <p class="section-note">전체 수량 대사 검증 상태 <code>{escape(str(reconciliation.get('quantity_reconciliation_validation_status', 'valid')))}</code> · 실제 수량 차이 품목 {_base.number(reconciliation.get('quantity_difference_count', reconciliation.get('quantity_reconciliation_mismatch_count', 0)))}개 · 수량 계산 검증 오류 {_base.number(reconciliation.get('quantity_validation_error_count', 0))}건 · 재고 스냅샷 검증 오류 {_base.number(reconciliation.get('inventory_snapshot_validation_error_count', 0))}건 · 전역 귀속 불가 수량 오류 {_base.number(reconciliation.get('global_quantity_validation_error_count', 0))}건</p>
-          <p class="section-note">수량 대사 전체 검증 상태가 <code>validation_error</code>이면 정상 행의 합계는 표시하지만, 대사 완료 또는 일치로 확정하지 않는다.</p>
-        </section>
-        <section aria-labelledby="problem-items-title">
-          <h3 id="problem-items-title">문제 품목 상세</h3>
-          <div class="table-scroll"><table><thead><tr><th>product_id</th><th>품명</th><th>FIFO 원가 상태</th><th>장부수량 계산 상태</th><th>재고 스냅샷 검증 상태</th><th>수량 대사 상태</th><th>금액 구성 검증 상태</th><th>기초 미확정 출고</th><th>기간 미확정 출고</th><th>전체 미확정 수량</th><th>종료일 음수재고</th><th>기준일 장부수량</th><th>재고 시트 수량</th><th>수량 차이</th><th>오류/경고</th></tr></thead><tbody>{problem_rows}</tbody></table></div>
-        </section>
-        <section aria-labelledby="transaction-errors-title">
-          <h3 id="transaction-errors-title">거래 단위 오류 상세</h3>
-          <div class="table-scroll"><table><thead><tr><th>source</th><th>date</th><th>voucher</th><th>excel_row</th><th>product_id</th><th>오류 코드</th><th>영향 범위</th><th>관련 금액</th></tr></thead><tbody>{transaction_error_rows}</tbody></table></div>
-        </section>
-      </section>
-    </article>
-    """
-    marker = "    <!-- REPORT_EXTRA_PAGES -->"
-    if marker not in html:
-        raise RuntimeError("inventory page insertion marker not found")
-    html = html.replace(marker, inserted, 1)
-    return finalize_report_html(html, spec)
+    html = _overview.render_report_html(sources, spec)
+    principal_rows = _overview._impl._base.principal_sales_cost_rows(
+        sources["sales"].get("records", []),
+        sources["purchase"].get("records", []),
+        sources.get("sales_voucher_metadata"),
+        sources["reconciliation"],
+    )[:8]
+    principal_chart = render_principal_sales_chart(principal_rows)
+    html = html.replace("  </style>", f"{PRINCIPAL_CHART_STYLE}\n  </style>", 1)
+    return finalize_report_html(_replace_principal_chart(html, principal_chart), spec)
 
 
-def generate_report(input_dir: Path, output_path: Path, spec_path: Path = _base.DEFAULT_SPEC) -> None:
-    sources = _base.load_sources(input_dir)
+def generate_report(
+    input_dir: Path,
+    output_path: Path,
+    spec_path: Path = _overview._impl._base.DEFAULT_SPEC,
+) -> None:
+    sources = _overview._impl._base.load_sources(input_dir)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(render_report_html(sources, _base.load_report_spec(spec_path)), encoding="utf-8")
+    output_path.write_text(
+        render_report_html(sources, _overview._impl._base.load_report_spec(spec_path)),
+        encoding="utf-8",
+    )
 
 
 def main() -> int:
-    args = _base.parse_args()
+    args = _overview._impl._base.parse_args()
     generate_report(args.input_dir, args.output, args.spec)
     print(f"wrote {args.output}")
     return 0

@@ -1,24 +1,24 @@
 report:
   title: "매입/매출 재고 분석 보고서"
-  scope: "FIFO 요약, 공급가액 금액 대사, 주간 재고흐름, 주간 매출 공급가액, 원청별 FIFO 매출원가"
-  # 첫 장(요약·금액 대사)은 항상 고정한다.
+  scope: "기간 요약, 손익 흐름, 재고 흐름, 원청·거래처·품목별 매출 구성"
+  # 첫 장(개요)은 항상 고정한다.
   # 아래 ID만 배열 순서대로 출력하며, 배열에서 빼면 해당 페이지를 제외한다.
   pages:
-    - vat_settlement
-    - weekly_inventory_flow
     - weekly_purchase_sales
+    - weekly_inventory_flow
     - principal_margin
+    - item_detail
 
 plotly:
   include_plotlyjs: inline
 
 charts:
   weekly_purchase_sales:
-    title: "주간 매출 공급가액"
+    title: "주간 매출과 매출원가"
     x_axis_title: "주 시작일"
     y_axis_title: "금액"
     unit_label: "원"
-    height: 320
+    height: 285
     series:
       sales_amount:
         label: "매출 공급가액"
@@ -26,35 +26,34 @@ charts:
       cost_amount:
         label: "매출원가"
         color: "#c47a23"
-
   weekly_inventory_flow:
-    title: "주간 재고금액 흐름: 매입은 위, 출고는 아래"
+    title: "주간 재고금액 흐름"
     x_axis_title: "주 시작일"
     y_axis_title: "주간 증감 금액 (백만원)"
-    secondary_y_axis_title: "주말 추정 재고금액 (백만원)"
+    secondary_y_axis_title: "주말 재고금액 (백만원)"
     unit_label: "백만원"
     value_divisor: 1000000
-    height: 340
+    height: 300
     series:
       purchase_increase:
         label: "주간 매입 증가"
         color: "#2f6f7e"
       outbound_cost_estimate:
-        label: "주간 출고 감소(FIFO 원가)"
+        label: "주간 출고 감소(원가)"
         color: "#c47a23"
       sales_amount:
         label: "주간 매출 공급가액"
         color: "#b54708"
       estimated_inventory_amount:
-        label: "주말 추정 재고금액"
+        label: "주말 재고금액"
         color: "#344054"
 
   principal_margin:
-    title: "원청별 매출 공급가액"
+    title: "원청별 매출과 원가"
     x_axis_title: "금액"
     y_axis_title: "원청"
     unit_label: "원"
-    height: 330
+    height: 190
     series:
       sales_amount:
         label: "매출 공급가액"

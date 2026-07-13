@@ -2,20 +2,21 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from html.parser import HTMLParser
+import re
 from typing import Any
 
 from plotly.offline import get_plotlyjs, get_plotlyjs_version
 
 
 REPORT_PAGE_ANCHORS: dict[str, str] = {
-    "vat_settlement": 'id="vat-settlement-title"',
-    "weekly_inventory_flow": 'id="inventory-flow-title"',
     "weekly_purchase_sales": 'id="weekly-title"',
+    "weekly_inventory_flow": 'id="inventory-flow-title"',
     "principal_margin": 'id="principal-title"',
+    "item_detail": 'id="item-detail-title"',
 }
 DEFAULT_REPORT_PAGES: tuple[str, ...] = tuple(REPORT_PAGE_ANCHORS)
 PLOTLY_REPORT_PAGES = frozenset(
-    {"weekly_inventory_flow", "weekly_purchase_sales", "principal_margin"}
+    {"weekly_inventory_flow", "weekly_purchase_sales"}
 )
 
 
@@ -111,6 +112,18 @@ def _report_page_spans(main_content: str) -> list[tuple[int, int]]:
     return parser.spans
 
 
+def _with_page_number(block: str, page_number: int, page_count: int) -> str:
+    updated, replacements = re.subn(
+        r'(<span class="page-number">).*?(</span>)',
+        rf"\g<1>{page_number:02d} / {page_count:02d}\g<2>",
+        block,
+        count=1,
+    )
+    if replacements != 1:
+        raise RuntimeError("each report page must contain one page number")
+    return updated
+
+
 def apply_report_page_layout(
     html: str,
     spec: Mapping[str, Any] | None,
@@ -132,8 +145,8 @@ def apply_report_page_layout(
 
     blocks = [main_content[start:end].strip() for start, end in spans]
     cover = blocks[0]
-    if "report-page--cover" not in cover:
-        raise RuntimeError("the first report page must be the fixed cover page")
+    if "report-page--overview" not in cover:
+        raise RuntimeError("the first report page must be the fixed overview page")
 
     page_blocks: dict[str, str] = {}
     for block in blocks[1:]:
@@ -149,7 +162,12 @@ def apply_report_page_layout(
     prefix = main_content[: spans[0][0]]
     suffix = main_content[spans[-1][1] :]
     ordered_blocks = [cover, *(page_blocks[page_id] for page_id in selected)]
-    rebuilt = prefix + "\n\n    ".join(ordered_blocks) + suffix
+    page_count = len(ordered_blocks)
+    numbered_blocks = [
+        _with_page_number(block, index, page_count)
+        for index, block in enumerate(ordered_blocks, start=1)
+    ]
+    rebuilt = prefix + "\n\n    ".join(numbered_blocks) + suffix
     return html[:content_start] + rebuilt + html[main_end:], selected
 
 
@@ -170,10 +188,9 @@ def _plotly_script(spec: Mapping[str, Any] | None) -> str:
 def finalize_report_html(html: str, spec: Mapping[str, Any] | None) -> str:
     """Apply page layout and load Plotly independently of any optional page."""
     html, selected = apply_report_page_layout(html, spec)
+    script = _plotly_script(spec)
     if not PLOTLY_REPORT_PAGES.intersection(selected):
         return html
-
-    script = _plotly_script(spec)
     if not script:
         return html
     head_end = html.find("</head>")
