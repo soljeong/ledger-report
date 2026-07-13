@@ -12,6 +12,7 @@ import pandas as pd
 import generate_analysis_report_html_core as _base
 from generate_analysis_report_html_core import *  # noqa: F401,F403
 from src.charts import weekly_inventory_flow_figure
+from src.report_page_layout import finalize_report_html
 
 
 def _numeric_frame(records: list[dict[str, Any]], columns: tuple[str, ...]) -> pd.DataFrame:
@@ -417,10 +418,9 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
         inventory_records,
         reconciliation_payload,
     )
-    include_plotlyjs = _base.include_plotlyjs_option(spec.get("plotly", {}).get("include_plotlyjs", "inline"))
     chart = _base.figure_html(
         weekly_inventory_flow_figure(pd.DataFrame(rows), chart_spec),
-        include_plotlyjs=include_plotlyjs,
+        include_plotlyjs=False,
     )
     inserted = f"""
     <article class="report-page report-page--analysis">
@@ -476,7 +476,8 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     marker = "    <!-- REPORT_EXTRA_PAGES -->"
     if marker not in html:
         raise RuntimeError("inventory page insertion marker not found")
-    return html.replace(marker, inserted, 1)
+    html = html.replace(marker, inserted, 1)
+    return finalize_report_html(html, spec)
 
 
 def generate_report(input_dir: Path, output_path: Path, spec_path: Path = _base.DEFAULT_SPEC) -> None:
