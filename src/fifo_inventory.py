@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Iterable
 
 ZERO = Decimal("0")
+MISSING_STOCK_QUANTITY_POLICIES = {"assume_zero", "validation_error"}
 
 
 def dec(value: Any) -> Decimal:
@@ -484,7 +485,21 @@ def _is_numeric(value: Any) -> bool:
     return True
 
 
-def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: Iterable[dict[str, Any]], inventory_records: Iterable[dict[str, Any]], period_start: str | date, period_end: str | date, inventory_date: str | date) -> dict[str, Any]:
+def calculate_fifo(
+    purchase_records: Iterable[dict[str, Any]],
+    sales_records: Iterable[dict[str, Any]],
+    inventory_records: Iterable[dict[str, Any]],
+    period_start: str | date,
+    period_end: str | date,
+    inventory_date: str | date,
+    *,
+    missing_stock_quantity_policy: str = "assume_zero",
+) -> dict[str, Any]:
+    if missing_stock_quantity_policy not in MISSING_STOCK_QUANTITY_POLICIES:
+        raise ValueError(
+            "missing_stock_quantity_policy must be one of "
+            f"{sorted(MISSING_STOCK_QUANTITY_POLICIES)!r}: {missing_stock_quantity_policy!r}"
+        )
     start, end, stock_date = iso_date(period_start), iso_date(period_end), iso_date(inventory_date)
     if not start <= end <= stock_date:
         raise ValueError("date relationship must satisfy period_start <= period_end <= inventory_date")
@@ -578,22 +593,32 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
             events.append((row, kind))
         transaction_validations.append(amount_state)
 
-    # Inventory snapshots are a fourth input eligibility stream.  Their
-    # quantity is never a FIFO cost input, and an unusable snapshot quantity
-    # must neither abort the run nor become a silent zero.
+    # Inventory snapshots are a fourth input eligibility stream. Their
+    # quantity is never a FIFO cost input. A blank snapshot quantity is an
+    # explicit business-policy case: the default treats it as zero for
+    # reconciliation while retaining the raw blank and its assumption in the
+    # output. Non-numeric nonblank values always remain validation errors.
     inventory_validations: list[dict[str, Any]] = []
     valid_inventory_records: list[dict[str, Any]] = []
     inventory_validation_error_products: set[Any] = set()
     inventory_validation_statuses_by_product: dict[Any, set[str]] = defaultdict(set)
     global_inventory_snapshot_validation_error_count = 0
     inventory_snapshot_validation_error_count = 0
+    assumed_zero_stock_quantity_count = 0
     for row in inventory:
         product_id = row.get("product_id")
         raw_quantity = row.get("stock_quantity")
         product_id_valid = product_id not in (None, "")
-        stock_quantity_valid = _is_numeric(raw_quantity)
+        assumed_zero = (
+            raw_quantity in (None, "")
+            and missing_stock_quantity_policy == "assume_zero"
+        )
+        effective_quantity = ZERO if assumed_zero else raw_quantity
+        stock_quantity_valid = _is_numeric(effective_quantity)
         if not product_id_valid:
             status = "missing_product_id"
+        elif assumed_zero:
+            status = "assumed_zero_stock_quantity"
         elif raw_quantity in (None, ""):
             status = "missing_stock_quantity"
         elif not stock_quantity_valid:
@@ -607,13 +632,17 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
             "item_name": row.get("item_name"),
             "specification": row.get("specification"),
             "stock_quantity": raw_quantity,
+            "effective_stock_quantity": out_number(dec(effective_quantity)) if stock_quantity_valid else None,
+            "stock_quantity_assumption": "assume_zero" if assumed_zero else None,
             "product_id_valid": product_id_valid,
             "stock_quantity_valid": stock_quantity_valid,
             "inventory_reconciliation_eligible": bool(product_id_valid and stock_quantity_valid),
             "inventory_validation_status": status,
         }
         inventory_validations.append(state)
-        if status != "valid":
+        if assumed_zero:
+            assumed_zero_stock_quantity_count += 1
+        if status not in {"valid", "assumed_zero_stock_quantity"}:
             # Counts are one per source row, even if both product_id and
             # stock_quantity are bad.  Field-specific errors remain in the
             # error detail so callers do not lose either cause.
@@ -631,9 +660,10 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
                 names[product_id].add(str(row["item_name"]))
             if row.get("specification"):
                 specs[product_id].add(str(row["specification"]))
+            if status != "valid":
+                inventory_validation_statuses_by_product[product_id].add(status)
             if not stock_quantity_valid:
                 inventory_validation_error_products.add(product_id)
-                inventory_validation_statuses_by_product[product_id].add(status)
         if not stock_quantity_valid:
             errors.append(_record_error(
                 "inventory", row,
@@ -643,7 +673,7 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
                 affects={"affects_quantity": False, "affects_fifo_cost": False, "affects_revenue": False, "affects_vat": False, "affects_inventory_reconciliation": True},
             ))
         if state["inventory_reconciliation_eligible"]:
-            valid_inventory_records.append(row)
+            valid_inventory_records.append({**row, "stock_quantity": effective_quantity})
     events.sort(key=lambda pair: event_sort_key(*pair))
     quantity_events.sort(key=lambda pair: event_sort_key(*pair))
     def has_valid_component(row: dict[str, Any], kind: str, component: str) -> bool:
@@ -831,7 +861,7 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
         inventory_statuses = inventory_validation_statuses_by_product.get(product_id, set())
         inventory_validation_status = next(
             (
-                status for status in ("missing_stock_quantity", "invalid_stock_quantity")
+                status for status in ("missing_stock_quantity", "invalid_stock_quantity", "assumed_zero_stock_quantity")
                 if status in inventory_statuses
             ),
             "valid",
@@ -1020,7 +1050,7 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
     summary["period_unconfirmed_quantity"] = out_number(period_unconfirmed_quantity)
     summary["all_unconfirmed_quantity"] = out_number(all_unconfirmed_quantity)
     summary["unconfirmed_quantity"] = out_number(all_unconfirmed_quantity)
-    summary.update({"cost_status_counts":status_counts,"status_counts":status_counts,"quantity_difference_count":len(quantity_difference_rows),"quantity_reconciliation_mismatch_count":len(quantity_difference_rows),"inventory_reconciliation_mismatch_count":len(quantity_difference_rows),"quantity_reconciliation_non_match_count":quantity_reconciliation_non_match_count,"quantity_reconciliation_validation_status":quantity_reconciliation_validation_status,"quantity_reconciliation_validation_error_count":quantity_reconciliation_validation_error_count,"quantity_validation_error_count":quantity_validation_error_count,"global_quantity_validation_error_count":global_quantity_validation_error_count,"inventory_snapshot_validation_error_count":inventory_snapshot_validation_error_count,"global_inventory_snapshot_validation_error_count":global_inventory_snapshot_validation_error_count,"ledger_only_count":recon_counts["ledger_only"],"inventory_only_count":recon_counts["inventory_only"],"inventory_negative_stock_count":recon_counts["inventory_negative_stock"],"opening_fifo_error_count":len(opening_fifo_errors),"period_fifo_error_count":len(period_fifo_errors),"backfill_dependency_error_count":len(backfill_dependency_errors),"post_period_unrelated_error_count":len(post_period_unrelated_errors),"error_count":len(errors)+len(amount_validation_errors)+len(all_engine_errors),"amount_validation_status":amount_validation_status,"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":len(period_amount_errors),"global_fifo_error_count":global_fifo_error_count,"reconciliation_status_counts":recon_counts,"unassigned_backfill_validation_error":unassigned_backfill_validation_error})
+    summary.update({"cost_status_counts":status_counts,"status_counts":status_counts,"quantity_difference_count":len(quantity_difference_rows),"quantity_reconciliation_mismatch_count":len(quantity_difference_rows),"inventory_reconciliation_mismatch_count":len(quantity_difference_rows),"quantity_reconciliation_non_match_count":quantity_reconciliation_non_match_count,"quantity_reconciliation_validation_status":quantity_reconciliation_validation_status,"quantity_reconciliation_validation_error_count":quantity_reconciliation_validation_error_count,"quantity_validation_error_count":quantity_validation_error_count,"global_quantity_validation_error_count":global_quantity_validation_error_count,"inventory_snapshot_validation_error_count":inventory_snapshot_validation_error_count,"global_inventory_snapshot_validation_error_count":global_inventory_snapshot_validation_error_count,"assumed_zero_stock_quantity_count":assumed_zero_stock_quantity_count,"ledger_only_count":recon_counts["ledger_only"],"inventory_only_count":recon_counts["inventory_only"],"inventory_negative_stock_count":recon_counts["inventory_negative_stock"],"opening_fifo_error_count":len(opening_fifo_errors),"period_fifo_error_count":len(period_fifo_errors),"backfill_dependency_error_count":len(backfill_dependency_errors),"post_period_unrelated_error_count":len(post_period_unrelated_errors),"error_count":len(errors)+len(amount_validation_errors)+len(all_engine_errors),"amount_validation_status":amount_validation_status,"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":len(period_amount_errors),"global_fifo_error_count":global_fifo_error_count,"reconciliation_status_counts":recon_counts,"unassigned_backfill_validation_error":unassigned_backfill_validation_error})
     summary.update({
         "period_purchase_record_count": len(amount_period_purchases),
         "period_sales_record_count": len(amount_period_sales),
@@ -1028,9 +1058,18 @@ def calculate_fifo(purchase_records: Iterable[dict[str, Any]], sales_records: It
         "period_sales_company_count": len({str(row.get("company")).strip() for row in amount_period_sales if row.get("company") not in (None, "")}),
     })
     warnings=[]
+    if assumed_zero_stock_quantity_count:
+        warnings.append({
+            "code": "missing_stock_quantity_assumed_zero",
+            "description": (
+                "재고 스냅샷의 빈 재고수량 "
+                f"{assumed_zero_stock_quantity_count:,}건을 명시된 정책에 따라 0으로 해석했다."
+            ),
+            "count": assumed_zero_stock_quantity_count,
+        })
     for product_id in sorted(product_ids,key=str):
         if len(names[product_id])>1: warnings.append({"code":"item_name_mismatch","product_id":product_id,"values":sorted(names[product_id])})
         if len(specs[product_id])>1: warnings.append({"code":"specification_mismatch","product_id":product_id,"values":sorted(specs[product_id])})
     public_events=[_clean(e) for engine in continuation.values() for e in engine.sales_cost_events]; public_unconfirmed_events=[_clean(e) for engine in continuation.values() for e in engine.unconfirmed_quantity_events]; public_purchases=[_clean(e) for engine in continuation.values() for e in engine.purchase_cost_events]; public_inventory_events=[_clean(e) for engine in ending.values() for e in engine.inventory_cost_events]
     all_dates=[iso_date(r["date"]) for r,k in dated_records]; purchase_dates=[iso_date(r["date"]) for r,k in dated_records if k=="purchase"]
-    return {"metadata":{"period_start":start.isoformat(),"period_end":end.isoformat(),"inventory_date":stock_date.isoformat(),"analysis_start_date":start.isoformat(),"analysis_end_date":end.isoformat(),"inventory_reference_date":stock_date.isoformat(),"input_data_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_data_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_data_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"input_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"backfill_last_purchase_date":max((a["purchase_date"] for a in backfills),default=None),"costing_method":"FIFO","inventory_unit_costs_used":False,"inventory_price_fields_ignored":["average_cost","latest_purchase_price","sales_price"]},"summary":summary,"rows":rows,"sales_allocations":all_sales,"sales_cost_events":public_events,"unconfirmed_quantity_events":public_unconfirmed_events,"purchase_cost_events":public_purchases,"inventory_cost_events":public_inventory_events,"unconfirmed_shipments":unconfirmed,"backfill_allocations":backfills,"cancellation_events":[event for engine in continuation.values() for event in engine.cancellations],"transaction_validations":transaction_validations,"inventory_validations":inventory_validations,"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":summary["amount_validation_error_count"],"errors":errors+amount_validation_errors+all_engine_errors,"warnings":warnings,"calculated_negative_stock":[row for row in rows if dec(row["ending_signed_stock_quantity"])<ZERO],"inventory_negative_stock":[row for row in rows if row["quantity_reconciliation_status"]=="inventory_negative_stock"],"quantity_mismatches":quantity_difference_rows,"quantity_reconciliation_non_matches":[row for row in rows if row["quantity_reconciliation_status"]!="match"]}
+    return {"metadata":{"period_start":start.isoformat(),"period_end":end.isoformat(),"inventory_date":stock_date.isoformat(),"analysis_start_date":start.isoformat(),"analysis_end_date":end.isoformat(),"inventory_reference_date":stock_date.isoformat(),"input_data_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_data_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_data_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"input_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"backfill_last_purchase_date":max((a["purchase_date"] for a in backfills),default=None),"costing_method":"FIFO","missing_stock_quantity_policy":missing_stock_quantity_policy,"inventory_unit_costs_used":False,"inventory_price_fields_ignored":["average_cost","latest_purchase_price","sales_price"]},"summary":summary,"rows":rows,"sales_allocations":all_sales,"sales_cost_events":public_events,"unconfirmed_quantity_events":public_unconfirmed_events,"purchase_cost_events":public_purchases,"inventory_cost_events":public_inventory_events,"unconfirmed_shipments":unconfirmed,"backfill_allocations":backfills,"cancellation_events":[event for engine in continuation.values() for event in engine.cancellations],"transaction_validations":transaction_validations,"inventory_validations":inventory_validations,"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":summary["amount_validation_error_count"],"errors":errors+amount_validation_errors+all_engine_errors,"warnings":warnings,"calculated_negative_stock":[row for row in rows if dec(row["ending_signed_stock_quantity"])<ZERO],"inventory_negative_stock":[row for row in rows if row["quantity_reconciliation_status"]=="inventory_negative_stock"],"quantity_mismatches":quantity_difference_rows,"quantity_reconciliation_non_matches":[row for row in rows if row["quantity_reconciliation_status"]!="match"]}

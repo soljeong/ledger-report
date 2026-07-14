@@ -586,6 +586,15 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
     inventory_product_count = inventory_meta.get("unique_product_ids")
     if inventory_product_count is None:
         inventory_product_count = _unique_value_count(inventory_records, "product_id")
+    assumed_zero_stock_quantity_count = _summary_value(
+        summary, "assumed_zero_stock_quantity_count", default=0
+    )
+    inventory_assumption_fact = ""
+    if assumed_zero_stock_quantity_count:
+        inventory_assumption_fact = (
+            '<div class="fact"><dt>재고 수량 가정</dt><dd>빈 재고수량 '
+            f'{_base.number(assumed_zero_stock_quantity_count)}건을 0으로 해석</dd></div>'
+        )
 
     return f"""<!doctype html>
 <html lang="ko">
@@ -780,6 +789,7 @@ def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = No
             <div class="fact"><dt>매입 상세</dt><dd>{_base.number(len(period_purchases))}건 · {_base.number(_unique_value_count(period_purchases, 'company'))}개 매입처</dd></div>
             <div class="fact"><dt>매출 상세</dt><dd>{_base.number(len(period_sales))}건 · {_base.number(_unique_value_count(period_sales, 'company'))}개 매출처</dd></div>
             <div class="fact"><dt>재고 품목</dt><dd>{_base.number(inventory_product_count)}개</dd></div>
+            {inventory_assumption_fact}
             <div class="fact"><dt>기간 매입원가</dt><dd>{_base.money(purchase_cost)}원</dd></div>
           </dl>
         </div>

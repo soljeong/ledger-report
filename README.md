@@ -84,7 +84,7 @@ HTML과 Excel은 `build_report_data()`를 함께 사용합니다. 따라서 분�
 
 장부금액, 장부수량, FIFO 원가는 서로 독립된 스트림입니다. 날짜·`product_id`·숫자 수량이 모두 유효한 거래만 장부수량과 FIFO에 쓰고, FIFO 매입 원가에는 추가로 숫자 `unit_price`가 필요합니다. 따라서 단가가 빠진 매입은 장부수량에는 남지만 FIFO 원가층에는 들어가지 않습니다.
 
-재고 시트의 각 행은 `inventory_validations`에 `product_id_valid`, `stock_quantity_valid`, `inventory_reconciliation_eligible`, `inventory_validation_status`로 공개됩니다. `stock_quantity`가 누락되거나 비수치이면 원본값과 오류를 보존하고 0으로 바꾸지 않습니다. 정상 재고 행만 합산하되, 같은 품목에 오류 행이 하나라도 있으면 해당 품목의 수량 대사는 `validation_error`입니다.
+재고 시트의 각 행은 `inventory_validations`에 `product_id_valid`, `stock_quantity_valid`, `inventory_reconciliation_eligible`, `inventory_validation_status`로 공개됩니다. 기본 정책(`assume_zero`)은 빈 `stock_quantity`를 수량 대사에서 0으로 해석합니다. 이때 원본 빈 값은 `stock_quantity`에 보존하고, 적용값은 `effective_stock_quantity: 0`, 근거는 `stock_quantity_assumption: "assume_zero"`로 남기며 집계에는 `assumed_zero_stock_quantity_count`를 기록합니다. 따라서 이는 조용한 보정이 아니라 보고서·Excel 검증결과에 남는 업무 가정입니다. 비어 있지 않은 비수치 값은 계속 오류입니다. 원본 누락을 오류로 처리하려면 `analyze_inventory.py --missing-stock-quantity-policy validation_error`를 사용합니다.
 
 - `quantity_difference_count`와 `quantity_reconciliation_mismatch_count`: 비교 가능한 장부·재고 수량의 실제 차이만 센다(`inventory_more`, `ledger_more`, `inventory_negative_stock`). `ledger_only`, `inventory_only`, `validation_error`는 제외한다.
 - `quantity_validation_error_count`: 날짜, `product_id`, 수량 때문에 장부수량 스트림에 들어가지 못한 거래 행 수다. 기준일 이후 행도 입력 검증 건수에는 남지만 현재 기준일 대사에는 영향을 주지 않는다.

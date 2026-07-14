@@ -31,9 +31,23 @@ def inventory(quantity: int, *, product_id=1, average_cost=999999, latest_purcha
     }
 
 
-def analyze(purchases, sales, inventories=None, start="2026-01-01", end="2026-12-31", stock_date="2026-12-31"):
+def analyze(
+    purchases,
+    sales,
+    inventories=None,
+    start="2026-01-01",
+    end="2026-12-31",
+    stock_date="2026-12-31",
+    missing_stock_quantity_policy="assume_zero",
+):
     return build_reconciliation(
-        {"records": purchases}, {"records": sales}, {"records": inventories or []}, start, end, stock_date
+        {"records": purchases},
+        {"records": sales},
+        {"records": inventories or []},
+        start,
+        end,
+        stock_date,
+        missing_stock_quantity_policy,
     )
 
 
@@ -529,10 +543,35 @@ class InventoryAnalysisTests(unittest.TestCase):
             ("match", "valid"),
         )
 
-    def test_inventory_snapshot_invalid_quantities_are_preserved_not_zeroed(self):
+    def test_blank_inventory_quantity_defaults_to_explicit_zero_assumption(self):
+        result = analyze([purchase("2026-01-01", 1, 100)], [], [inventory(None)])
+        row, state, summary = result["rows"][0], result["inventory_validations"][0], result["summary"]
+
+        self.assertEqual(row["inventory_sheet_quantity"], 0)
+        self.assertEqual(row["inventory_quantity_difference"], -1)
+        self.assertEqual(
+            (row["inventory_validation_status"], row["quantity_reconciliation_status"]),
+            ("assumed_zero_stock_quantity", "ledger_more"),
+        )
+        self.assertEqual(
+            (state["stock_quantity"], state["effective_stock_quantity"], state["stock_quantity_assumption"]),
+            (None, 0, "assume_zero"),
+        )
+        self.assertEqual(
+            (summary["assumed_zero_stock_quantity_count"], summary["inventory_snapshot_validation_error_count"], summary["quantity_reconciliation_validation_status"]),
+            (1, 0, "valid"),
+        )
+        self.assertEqual(result["metadata"]["missing_stock_quantity_policy"], "assume_zero")
+
+    def test_inventory_snapshot_invalid_quantities_are_preserved_with_validation_error_policy(self):
         for raw, expected_status in ((None, "missing_stock_quantity"), ("", "missing_stock_quantity"), ("invalid", "invalid_stock_quantity")):
             with self.subTest(stock_quantity=raw):
-                result = analyze([purchase("2026-01-01", 1, 100)], [], [inventory(raw)])
+                result = analyze(
+                    [purchase("2026-01-01", 1, 100)],
+                    [],
+                    [inventory(raw)],
+                    missing_stock_quantity_policy="validation_error",
+                )
                 row, state, summary = result["rows"][0], result["inventory_validations"][0], result["summary"]
 
                 self.assertEqual(row["inventory_sheet_quantity"], None)

@@ -1074,16 +1074,24 @@ def render_report_html(
         include_plotlyjs=False,
     )
     principal_table_rows = render_principal_margin_rows(principal_rows)
-    summary_rows_html = "\n".join(
-        [
-            summary_row("분석 기간", period),
+    summary_rows = [
+        summary_row("분석 기간", period),
+        summary_row(
+            "거래 건수",
+            f"매입 상세 {number(purchase_meta['record_count'])}건 / 매출 상세 {number(sales_meta['record_count'])}건",
+            f"재고 품목 {number(inventory_meta['unique_product_ids'])}개",
+        ),
+    ]
+    assumed_zero_stock_quantity_count = reconciliation.get("assumed_zero_stock_quantity_count", 0)
+    if assumed_zero_stock_quantity_count:
+        summary_rows.append(
             summary_row(
-                "거래 건수",
-                f"매입 상세 {number(purchase_meta['record_count'])}건 / 매출 상세 {number(sales_meta['record_count'])}건",
-                f"재고 품목 {number(inventory_meta['unique_product_ids'])}개",
-            ),
-        ]
-    )
+                "재고 수량 가정",
+                f"빈 재고수량 {number(assumed_zero_stock_quantity_count)}건을 0으로 해석",
+                "원본 빈 값은 보존하고 수량 대사에만 적용",
+            )
+        )
+    summary_rows_html = "\n".join(summary_rows)
 
     amount_rows = [
         ("매출 공급가액", "분석기간 매출 상세 공급가액 합계 (부가세 제외)", money(sales_amount)),

@@ -19,6 +19,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--period-start", required=True, help="Analysis period start, YYYY-MM-DD")
     parser.add_argument("--period-end", required=True, help="Analysis period end, YYYY-MM-DD")
     parser.add_argument("--inventory-date", required=True, help="Stock snapshot reconciliation date, YYYY-MM-DD")
+    parser.add_argument(
+        "--missing-stock-quantity-policy",
+        choices=("assume_zero", "validation_error"),
+        default="assume_zero",
+        help="How blank inventory stock_quantity values are handled (default: assume_zero).",
+    )
     parser.add_argument("--json-out", type=Path, default=DEFAULT_DATA_DIR / "inventory_reconciliation.json")
     parser.add_argument("--md-out", type=Path, default=DEFAULT_DATA_DIR / "inventory_reconciliation.md")
     return parser.parse_args()
@@ -38,6 +44,7 @@ def build_reconciliation(
     period_start: str | None = None,
     period_end: str | None = None,
     inventory_date: str | None = None,
+    missing_stock_quantity_policy: str = "assume_zero",
 ) -> dict[str, Any]:
     all_dates = [
         row.get("date")
@@ -57,6 +64,7 @@ def build_reconciliation(
         period_start,
         period_end,
         inventory_date,
+        missing_stock_quantity_policy=missing_stock_quantity_policy,
     )
 
 
@@ -76,6 +84,7 @@ def render_markdown(analysis: dict[str, Any]) -> str:
         "",
         f"- 분석기간: {metadata['period_start']} ~ {metadata['period_end']}",
         f"- 재고 기준일: {metadata['inventory_date']}",
+        f"- 빈 재고수량 정책: {metadata['missing_stock_quantity_policy']}",
         f"- 입력 거래일: {metadata['input_data_first_transaction_date']} ~ {metadata['input_data_last_transaction_date']}",
         f"- 원가 방식: {metadata['costing_method']} (재고 시트 단가 미사용)",
         "",
@@ -119,6 +128,7 @@ def main() -> int:
             args.period_start,
             args.period_end,
             args.inventory_date,
+            args.missing_stock_quantity_policy,
         )
     except ValueError as exc:
         raise SystemExit(f"analyze_inventory: error: {exc}") from exc
