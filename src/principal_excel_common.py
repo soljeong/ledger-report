@@ -40,8 +40,7 @@ PRINCIPAL_VOUCHER_COLUMNS = [
     "매출원가",
     "매출총이익",
     "이익률",
-    "원본행",
-    "transaction_id",
+    "거래정보",
 ]
 
 PRINCIPAL_ITEM_COLUMNS = [
@@ -60,21 +59,17 @@ PRINCIPAL_ITEM_COLUMNS = [
     "이익률",
     "기말재고수량",
     "기말재고금액",
-    "transaction_date",
-    "transaction_type",
-    "transaction_id",
-    "voucher",
-    "excel_row",
-    "transaction_quantity",
-    "allocation_sequence",
-    "allocated_quantity",
-    "source_purchase_date",
-    "source_purchase_voucher",
-    "source_purchase_excel_row",
-    "source_purchase_unit_cost",
-    "fifo_cost_amount",
-    "allocation_type",
-    "unallocated_quantity",
+    "거래정보",
+    "수량",
+    "단가",
+    "거래 매출원가",
+]
+
+# The last display header intentionally duplicates the period-summary "매출원가"
+# column.  Keep a distinct internal key so row values cannot overwrite each other.
+PRINCIPAL_ITEM_HEADERS = [
+    *(PRINCIPAL_ITEM_COLUMNS[:-1]),
+    "매출원가",
 ]
 
 
@@ -224,10 +219,15 @@ def _write_cell(cell, value: Any, column: str) -> None:
     cell.alignment = Alignment(vertical="top", wrap_text=True)
 
 
-def _write_header(ws: Worksheet, row_number: int, columns: list[str]) -> None:
-    for column_number, column in enumerate(columns, start=1):
+def _write_header(
+    ws: Worksheet,
+    row_number: int,
+    columns: list[str],
+    headers: list[str] | None = None,
+) -> None:
+    for column_number, (column, header) in enumerate(zip(columns, headers or columns), start=1):
         cell = ws.cell(row_number, column_number)
-        _write_cell(cell, column, column)
+        _write_cell(cell, header, column)
         cell.fill = HEADER_FILL
         cell.font = HEADER_FONT
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -259,9 +259,9 @@ def _write_row(
     dimension.collapsed = collapsed
 
 
-def _auto_size(ws: Worksheet, columns: list[str]) -> None:
-    for column_number, column in enumerate(columns, start=1):
-        width = max(9, len(column) + 2)
+def _auto_size(ws: Worksheet, columns: list[str], headers: list[str] | None = None) -> None:
+    for column_number, (column, header) in enumerate(zip(columns, headers or columns), start=1):
+        width = max(9, len(header) + 2)
         for row_number in range(1, ws.max_row + 1):
             value = ws.cell(row_number, column_number).value
             if value is not None:
@@ -269,13 +269,18 @@ def _auto_size(ws: Worksheet, columns: list[str]) -> None:
         ws.column_dimensions[get_column_letter(column_number)].width = width
 
 
-def _set_sheet_options(ws: Worksheet, columns: list[str], header_row: int = 3) -> None:
+def _set_sheet_options(
+    ws: Worksheet,
+    columns: list[str],
+    header_row: int = 3,
+    headers: list[str] | None = None,
+) -> None:
     ws.freeze_panes = f"A{header_row + 1}"
     ws.auto_filter.ref = f"A{header_row}:{get_column_letter(len(columns))}{max(ws.max_row, header_row + 1)}"
     ws.sheet_properties.outlinePr.summaryBelow = False
     ws.sheet_properties.outlinePr.applyStyles = True
     ws.sheet_view.showGridLines = False
-    _auto_size(ws, columns)
+    _auto_size(ws, columns, headers)
 
 
 def _sales_detail_row(row: dict[str, Any], principal: str, cost_by_transaction: dict[str, Decimal | None]) -> dict[str, Any]:
@@ -299,8 +304,6 @@ def _sales_detail_row(row: dict[str, Any], principal: str, cost_by_transaction: 
         "매출원가": _number(cost_amount),
         "매출총이익": _number(margin_amount),
         "이익률": float(margin_rate) if margin_rate is not None else None,
-        "원본행": row.get("excel_row"),
-        "transaction_id": _transaction_id(row),
+        "거래정보": _transaction_id(row),
     }
-
 

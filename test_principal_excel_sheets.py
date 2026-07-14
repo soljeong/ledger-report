@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -43,9 +43,16 @@ class PrincipalExcelSheetsTests(unittest.TestCase):
         self.assertEqual(workbook.sheetnames.index(PRINCIPAL_ITEM_SHEET), workbook.sheetnames.index(PRINCIPAL_VOUCHER_SHEET) + 1)
 
         worksheet = workbook[PRINCIPAL_VOUCHER_SHEET]
+        self.assertEqual(
+            [cell.value for cell in worksheet[3]],
+            [
+                "구분", "원청", "일자", "전표", "거래처", "품목코드", "품명", "규격", "수량", "매출단가",
+                "매출 공급가액", "매출원가", "매출총이익", "이익률", "거래정보",
+            ],
+        )
         headers = self._headers(worksheet)
         self.assertEqual(headers["매출원가"], headers["매출 공급가액"] + 1)
-        detail_row = self._matching_rows(worksheet, headers, transaction_id="2026-05-10|2|3")[0]
+        detail_row = self._matching_rows(worksheet, headers, 거래정보="2026-05-10|2|3")[0]
         self.assertEqual(worksheet.cell(detail_row, headers["구분"]).value, "매출")
         self.assertEqual(worksheet.cell(detail_row, headers["원청"]).value, "Demo Buyer A")
         self.assertEqual(worksheet.cell(detail_row, headers["매출 공급가액"]).value, 2000)
@@ -61,7 +68,7 @@ class PrincipalExcelSheetsTests(unittest.TestCase):
             headers,
             구분="전표 합계",
             원청="Demo Buyer A",
-            일자=date(2026, 5, 10),
+            일자=datetime(2026, 5, 10),
             전표=2,
         )[0]
         self.assertEqual(worksheet.cell(voucher_row, headers["매출 공급가액"]).value, 2000)
@@ -82,6 +89,14 @@ class PrincipalExcelSheetsTests(unittest.TestCase):
     def test_principal_item_sheet_repeats_common_inventory_and_offsets_only_duplicate_amount(self):
         workbook = self._create_workbook()
         worksheet = workbook[PRINCIPAL_ITEM_SHEET]
+        self.assertEqual(
+            [cell.value for cell in worksheet[3]],
+            [
+                "구분", "원청", "거래원청", "product_id", "item_name", "specification", "기간매입수량", "기간매입금액",
+                "기간매출수량", "기간매출액", "매출원가", "매출총이익", "이익률", "기말재고수량", "기말재고금액",
+                "거래정보", "수량", "단가", "매출원가",
+            ],
+        )
         headers = self._headers(worksheet)
 
         item_rows = [
@@ -102,7 +117,7 @@ class PrincipalExcelSheetsTests(unittest.TestCase):
             worksheet,
             headers,
             구분="매입",
-            transaction_id="2026-05-01|1|2",
+            거래정보="2026-05-01|1|2",
         )
         self.assertEqual(len(repeated_purchase_rows), 2)
         self.assertEqual(
@@ -115,14 +130,14 @@ class PrincipalExcelSheetsTests(unittest.TestCase):
             headers,
             구분="매출",
             원청="Demo Buyer A",
-            transaction_id="2026-05-10|2|3",
+            거래정보="2026-05-10|2|3",
         )
         buyer_b_sale = self._matching_rows(
             worksheet,
             headers,
             구분="매출",
             원청="Demo Buyer B",
-            transaction_id="2026-05-20|3|4",
+            거래정보="2026-05-20|3|4",
         )
         self.assertTrue(buyer_a_sale)
         self.assertTrue(buyer_b_sale)
@@ -132,7 +147,7 @@ class PrincipalExcelSheetsTests(unittest.TestCase):
                 headers,
                 구분="매출",
                 원청="Demo Buyer B",
-                transaction_id="2026-05-10|2|3",
+                거래정보="2026-05-10|2|3",
             )
         )
 

@@ -14,6 +14,7 @@ from src.principal_excel_common import (
     MISSING_PRINCIPAL,
     PRINCIPAL_FILL,
     PRINCIPAL_ITEM_COLUMNS,
+    PRINCIPAL_ITEM_HEADERS,
     PRINCIPAL_ITEM_SHEET,
     TOTAL_FILL,
     _decimal,
@@ -101,7 +102,7 @@ def write_principal_item_sheet(
     ws.cell(1, 1, "원청별 품목 수불")
     ws.cell(1, 1).font = Font(bold=True, size=14)
     ws.cell(2, 1, "매출은 해당 원청 건만, 매입과 기말재고는 해당 품목 전체를 표시합니다. 공통 품목의 중복 기말재고금액은 하단에서 차감합니다.")
-    _write_header(ws, 3, PRINCIPAL_ITEM_COLUMNS)
+    _write_header(ws, 3, PRINCIPAL_ITEM_COLUMNS, PRINCIPAL_ITEM_HEADERS)
 
     principal_by_voucher = _principal_map(report_data)
     cost_by_transaction = _sale_cost_map(report_data)
@@ -250,7 +251,10 @@ def write_principal_item_sheet(
                     "구분": detail_type,
                     "원청": principal,
                     "거래원청": transaction_principal,
-                    **{column: fifo_row.get(column) for column in PRINCIPAL_ITEM_COLUMNS if column in fifo_row},
+                    "거래정보": fifo_row.get("transaction_id"),
+                    "수량": fifo_row.get("transaction_quantity"),
+                    "단가": fifo_row.get("source_purchase_unit_cost"),
+                    "거래 매출원가": fifo_row.get("fifo_cost_amount"),
                 }
                 _write_row(
                     ws,
@@ -312,5 +316,5 @@ def write_principal_item_sheet(
         },
     )
 
-    _set_sheet_options(ws, PRINCIPAL_ITEM_COLUMNS)
+    _set_sheet_options(ws, PRINCIPAL_ITEM_COLUMNS, headers=PRINCIPAL_ITEM_HEADERS)
     return ws
