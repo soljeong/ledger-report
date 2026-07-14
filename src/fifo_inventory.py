@@ -12,6 +12,8 @@ from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Iterable
 
+from src.analysis_spec import NON_INVENTORY_CONSUMABLE, validate_analysis_spec
+
 ZERO = Decimal("0")
 MISSING_STOCK_QUANTITY_POLICIES = {"assume_zero", "validation_error"}
 
@@ -494,6 +496,7 @@ def calculate_fifo(
     inventory_date: str | date,
     *,
     missing_stock_quantity_policy: str = "assume_zero",
+    inventory_adjustments: Iterable[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if missing_stock_quantity_policy not in MISSING_STOCK_QUANTITY_POLICIES:
         raise ValueError(
@@ -504,6 +507,62 @@ def calculate_fifo(
     if not start <= end <= stock_date:
         raise ValueError("date relationship must satisfy period_start <= period_end <= inventory_date")
     purchases, sales, inventory = list(purchase_records), list(sales_records), list(inventory_records)
+    adjustment_spec = validate_analysis_spec(
+        {"version": 1, "inventory_adjustments": list(inventory_adjustments or [])}
+    )
+    adjustments_by_product = {
+        adjustment["product_id"]: adjustment
+        for adjustment in adjustment_spec["inventory_adjustments"]
+    }
+    applied_inventory_adjustments: list[dict[str, Any]] = []
+    for product_id, adjustment in adjustments_by_product.items():
+        raw_ending_quantity = ZERO
+        template: dict[str, Any] | None = None
+        for row, direction in (
+            [(row, Decimal("1")) for row in purchases]
+            + [(row, Decimal("-1")) for row in sales]
+        ):
+            if row.get("product_id") != product_id:
+                continue
+            if template is None:
+                template = row
+            try:
+                row_date = iso_date(row.get("date"))
+            except ValueError:
+                continue
+            if row_date <= stock_date and _is_numeric(row.get("quantity")):
+                raw_ending_quantity += direction * dec(row["quantity"])
+
+        virtual_quantity = max(-raw_ending_quantity, ZERO)
+        virtual_purchase: dict[str, Any] | None = None
+        if virtual_quantity:
+            virtual_purchase = {
+                "date": start.isoformat(),
+                "voucher": f"analysis-adjustment:{adjustment['id']}",
+                "excel_row": None,
+                "transaction_type": "purchase",
+                "company": None,
+                "item_name": (template or {}).get("item_name"),
+                "specification": (template or {}).get("specification"),
+                "product_id": product_id,
+                "quantity": out_number(virtual_quantity),
+                "unit_price": 0,
+                "supply_amount": 0,
+                "vat": 0,
+                "total_amount": 0,
+                "is_analysis_adjustment": True,
+                "analysis_adjustment_id": adjustment["id"],
+                "analysis_adjustment_treatment": adjustment["treatment"],
+            }
+            purchases.append(virtual_purchase)
+        applied_inventory_adjustments.append(
+            {
+                **adjustment,
+                "raw_ending_quantity": out_number(raw_ending_quantity),
+                "effective_ending_quantity": 0,
+                "virtual_purchase": virtual_purchase,
+            }
+        )
     errors: list[dict[str, Any]] = []
     amount_validation_errors: list[dict[str, Any]] = []
     transaction_validations: list[dict[str, Any]] = []
@@ -609,14 +668,20 @@ def calculate_fifo(
         product_id = row.get("product_id")
         raw_quantity = row.get("stock_quantity")
         product_id_valid = product_id not in (None, "")
+        non_inventory_consumable = (
+            adjustments_by_product.get(product_id, {}).get("treatment")
+            == NON_INVENTORY_CONSUMABLE
+        )
         assumed_zero = (
             raw_quantity in (None, "")
             and missing_stock_quantity_policy == "assume_zero"
         )
-        effective_quantity = ZERO if assumed_zero else raw_quantity
+        effective_quantity = ZERO if assumed_zero or non_inventory_consumable else raw_quantity
         stock_quantity_valid = _is_numeric(effective_quantity)
         if not product_id_valid:
             status = "missing_product_id"
+        elif non_inventory_consumable:
+            status = "non_inventory_consumable_ending_zero"
         elif assumed_zero:
             status = "assumed_zero_stock_quantity"
         elif raw_quantity in (None, ""):
@@ -633,7 +698,11 @@ def calculate_fifo(
             "specification": row.get("specification"),
             "stock_quantity": raw_quantity,
             "effective_stock_quantity": out_number(dec(effective_quantity)) if stock_quantity_valid else None,
-            "stock_quantity_assumption": "assume_zero" if assumed_zero else None,
+            "stock_quantity_assumption": (
+                "non_inventory_consumable_ending_zero"
+                if non_inventory_consumable
+                else ("assume_zero" if assumed_zero else None)
+            ),
             "product_id_valid": product_id_valid,
             "stock_quantity_valid": stock_quantity_valid,
             "inventory_reconciliation_eligible": bool(product_id_valid and stock_quantity_valid),
@@ -642,7 +711,7 @@ def calculate_fifo(
         inventory_validations.append(state)
         if assumed_zero:
             assumed_zero_stock_quantity_count += 1
-        if status not in {"valid", "assumed_zero_stock_quantity"}:
+        if status not in {"valid", "assumed_zero_stock_quantity", "non_inventory_consumable_ending_zero"}:
             # Counts are one per source row, even if both product_id and
             # stock_quantity are bad.  Field-specific errors remain in the
             # error detail so callers do not lose either cause.
@@ -861,7 +930,12 @@ def calculate_fifo(
         inventory_statuses = inventory_validation_statuses_by_product.get(product_id, set())
         inventory_validation_status = next(
             (
-                status for status in ("missing_stock_quantity", "invalid_stock_quantity", "assumed_zero_stock_quantity")
+                status for status in (
+                    "missing_stock_quantity",
+                    "invalid_stock_quantity",
+                    "non_inventory_consumable_ending_zero",
+                    "assumed_zero_stock_quantity",
+                )
                 if status in inventory_statuses
             ),
             "valid",
@@ -1050,6 +1124,17 @@ def calculate_fifo(
     summary["period_unconfirmed_quantity"] = out_number(period_unconfirmed_quantity)
     summary["all_unconfirmed_quantity"] = out_number(all_unconfirmed_quantity)
     summary["unconfirmed_quantity"] = out_number(all_unconfirmed_quantity)
+    summary["analysis_adjustment_count"] = len(applied_inventory_adjustments)
+    summary["virtual_zero_cost_purchase_quantity"] = out_number(
+        sum(
+            (
+                dec(adjustment["virtual_purchase"]["quantity"])
+                for adjustment in applied_inventory_adjustments
+                if adjustment["virtual_purchase"]
+            ),
+            ZERO,
+        )
+    )
     summary.update({"cost_status_counts":status_counts,"status_counts":status_counts,"quantity_difference_count":len(quantity_difference_rows),"quantity_reconciliation_mismatch_count":len(quantity_difference_rows),"inventory_reconciliation_mismatch_count":len(quantity_difference_rows),"quantity_reconciliation_non_match_count":quantity_reconciliation_non_match_count,"quantity_reconciliation_validation_status":quantity_reconciliation_validation_status,"quantity_reconciliation_validation_error_count":quantity_reconciliation_validation_error_count,"quantity_validation_error_count":quantity_validation_error_count,"global_quantity_validation_error_count":global_quantity_validation_error_count,"inventory_snapshot_validation_error_count":inventory_snapshot_validation_error_count,"global_inventory_snapshot_validation_error_count":global_inventory_snapshot_validation_error_count,"assumed_zero_stock_quantity_count":assumed_zero_stock_quantity_count,"ledger_only_count":recon_counts["ledger_only"],"inventory_only_count":recon_counts["inventory_only"],"inventory_negative_stock_count":recon_counts["inventory_negative_stock"],"opening_fifo_error_count":len(opening_fifo_errors),"period_fifo_error_count":len(period_fifo_errors),"backfill_dependency_error_count":len(backfill_dependency_errors),"post_period_unrelated_error_count":len(post_period_unrelated_errors),"error_count":len(errors)+len(amount_validation_errors)+len(all_engine_errors),"amount_validation_status":amount_validation_status,"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":len(period_amount_errors),"global_fifo_error_count":global_fifo_error_count,"reconciliation_status_counts":recon_counts,"unassigned_backfill_validation_error":unassigned_backfill_validation_error})
     summary.update({
         "period_purchase_record_count": len(amount_period_purchases),
@@ -1067,9 +1152,22 @@ def calculate_fifo(
             ),
             "count": assumed_zero_stock_quantity_count,
         })
+    for adjustment in applied_inventory_adjustments:
+        virtual_purchase = adjustment["virtual_purchase"]
+        virtual_quantity = virtual_purchase["quantity"] if virtual_purchase else 0
+        warnings.append({
+            "code": "non_inventory_consumable_adjustment",
+            "description": (
+                f"품목 {adjustment['product_id']}을 수량 비관리 부자재로 처리하여 "
+                f"기말 재고를 0으로 가정했고, 기준기간 첫날에 단가 0원 가상 매입 "
+                f"{virtual_quantity:,}을 적용했다."
+            ),
+            "adjustment_id": adjustment["id"],
+            "product_id": adjustment["product_id"],
+        })
     for product_id in sorted(product_ids,key=str):
         if len(names[product_id])>1: warnings.append({"code":"item_name_mismatch","product_id":product_id,"values":sorted(names[product_id])})
         if len(specs[product_id])>1: warnings.append({"code":"specification_mismatch","product_id":product_id,"values":sorted(specs[product_id])})
     public_events=[_clean(e) for engine in continuation.values() for e in engine.sales_cost_events]; public_unconfirmed_events=[_clean(e) for engine in continuation.values() for e in engine.unconfirmed_quantity_events]; public_purchases=[_clean(e) for engine in continuation.values() for e in engine.purchase_cost_events]; public_inventory_events=[_clean(e) for engine in ending.values() for e in engine.inventory_cost_events]
     all_dates=[iso_date(r["date"]) for r,k in dated_records]; purchase_dates=[iso_date(r["date"]) for r,k in dated_records if k=="purchase"]
-    return {"metadata":{"period_start":start.isoformat(),"period_end":end.isoformat(),"inventory_date":stock_date.isoformat(),"analysis_start_date":start.isoformat(),"analysis_end_date":end.isoformat(),"inventory_reference_date":stock_date.isoformat(),"input_data_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_data_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_data_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"input_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"backfill_last_purchase_date":max((a["purchase_date"] for a in backfills),default=None),"costing_method":"FIFO","missing_stock_quantity_policy":missing_stock_quantity_policy,"inventory_unit_costs_used":False,"inventory_price_fields_ignored":["average_cost","latest_purchase_price","sales_price"]},"summary":summary,"rows":rows,"sales_allocations":all_sales,"sales_cost_events":public_events,"unconfirmed_quantity_events":public_unconfirmed_events,"purchase_cost_events":public_purchases,"inventory_cost_events":public_inventory_events,"unconfirmed_shipments":unconfirmed,"backfill_allocations":backfills,"cancellation_events":[event for engine in continuation.values() for event in engine.cancellations],"transaction_validations":transaction_validations,"inventory_validations":inventory_validations,"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":summary["amount_validation_error_count"],"errors":errors+amount_validation_errors+all_engine_errors,"warnings":warnings,"calculated_negative_stock":[row for row in rows if dec(row["ending_signed_stock_quantity"])<ZERO],"inventory_negative_stock":[row for row in rows if row["quantity_reconciliation_status"]=="inventory_negative_stock"],"quantity_mismatches":quantity_difference_rows,"quantity_reconciliation_non_matches":[row for row in rows if row["quantity_reconciliation_status"]!="match"]}
+    return {"metadata":{"period_start":start.isoformat(),"period_end":end.isoformat(),"inventory_date":stock_date.isoformat(),"analysis_start_date":start.isoformat(),"analysis_end_date":end.isoformat(),"inventory_reference_date":stock_date.isoformat(),"input_data_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_data_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_data_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"input_first_transaction_date":min(all_dates).isoformat() if all_dates else None,"input_last_transaction_date":max(all_dates).isoformat() if all_dates else None,"input_last_purchase_date":max(purchase_dates).isoformat() if purchase_dates else None,"backfill_last_purchase_date":max((a["purchase_date"] for a in backfills),default=None),"costing_method":"FIFO","missing_stock_quantity_policy":missing_stock_quantity_policy,"applied_inventory_adjustments":applied_inventory_adjustments,"inventory_unit_costs_used":False,"inventory_price_fields_ignored":["average_cost","latest_purchase_price","sales_price"]},"summary":summary,"rows":rows,"sales_allocations":all_sales,"sales_cost_events":public_events,"unconfirmed_quantity_events":public_unconfirmed_events,"purchase_cost_events":public_purchases,"inventory_cost_events":public_inventory_events,"unconfirmed_shipments":unconfirmed,"backfill_allocations":backfills,"cancellation_events":[event for engine in continuation.values() for event in engine.cancellations],"transaction_validations":transaction_validations,"inventory_validations":inventory_validations,"amount_validation_errors":amount_validation_errors,"amount_validation_error_count":summary["amount_validation_error_count"],"errors":errors+amount_validation_errors+all_engine_errors,"warnings":warnings,"calculated_negative_stock":[row for row in rows if dec(row["ending_signed_stock_quantity"])<ZERO],"inventory_negative_stock":[row for row in rows if row["quantity_reconciliation_status"]=="inventory_negative_stock"],"quantity_mismatches":quantity_difference_rows,"quantity_reconciliation_non_matches":[row for row in rows if row["quantity_reconciliation_status"]!="match"]}

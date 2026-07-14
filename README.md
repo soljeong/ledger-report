@@ -94,6 +94,26 @@ HTML과 Excel은 `build_report_data()`를 함께 사용합니다. 따라서 분�
 
 기초 장부수량은 `opening_stock_quantity`(=`opening_signed_stock_quantity`)이며, 이는 시작일 전 매입수량에서 매출수량을 뺀 값입니다. `opening_normal_stock_quantity`과 `opening_negative_stock_quantity`는 그 부호를 분리한 값이고, `opening_costed_layer_quantity`과 `opening_stock_amount`는 단가까지 확인된 FIFO 원가층만 나타냅니다.
 
+## 분석 조정 스펙
+
+원본 Excel과 파싱 JSON을 변경하지 않는 업무 가정은 분석 계층의 YAML 스펙으로 적용합니다. `non_inventory_consumable`은 수량 비관리 부자재를 위한 정책입니다. 기준일 기준 장부수량이 음수이면 그 절댓값만큼을 분석기간 첫날에 단가 0원 가상 매입으로 넣고, 재고 스냅샷 수량은 0으로 해석합니다. 원본값·가상 매입·적용 근거는 `inventory_reconciliation.json`과 `analysis_adjustments.json`에 남고, HTML·Excel에는 경고 및 가정으로 표시됩니다.
+
+```yaml
+version: 1
+inventory_adjustments:
+  - id: non-inventory-consumable-example
+    product_id: 1001
+    treatment: non_inventory_consumable
+    description: Quantity-unmanaged consumable; ending inventory is assumed to be zero.
+```
+
+```bash
+.venv/bin/python analyze_inventory.py \
+  --base-dir private_intermediate/run \
+  --period-start YYYY-MM-DD --period-end YYYY-MM-DD --inventory-date YYYY-MM-DD \
+  --analysis-spec private_intermediate/run/analysis_spec.yaml
+```
+
 ## Private Workflow
 
 ```bash

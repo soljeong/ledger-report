@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from src.analysis_spec import load_analysis_spec
 from src.fifo_inventory import calculate_fifo
 
 
@@ -24,6 +25,16 @@ def parse_args() -> argparse.Namespace:
         choices=("assume_zero", "validation_error"),
         default="assume_zero",
         help="How blank inventory stock_quantity values are handled (default: assume_zero).",
+    )
+    parser.add_argument(
+        "--analysis-spec",
+        type=Path,
+        help="YAML analysis-layer inventory adjustment specification.",
+    )
+    parser.add_argument(
+        "--adjustments-out",
+        type=Path,
+        help="JSON audit artifact for the applied analysis adjustments.",
     )
     parser.add_argument("--json-out", type=Path, default=DEFAULT_DATA_DIR / "inventory_reconciliation.json")
     parser.add_argument("--md-out", type=Path, default=DEFAULT_DATA_DIR / "inventory_reconciliation.md")
@@ -45,6 +56,7 @@ def build_reconciliation(
     period_end: str | None = None,
     inventory_date: str | None = None,
     missing_stock_quantity_policy: str = "assume_zero",
+    inventory_adjustments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     all_dates = [
         row.get("date")
@@ -65,6 +77,7 @@ def build_reconciliation(
         period_end,
         inventory_date,
         missing_stock_quantity_policy=missing_stock_quantity_policy,
+        inventory_adjustments=inventory_adjustments,
     )
 
 
@@ -85,6 +98,7 @@ def render_markdown(analysis: dict[str, Any]) -> str:
         f"- 분석기간: {metadata['period_start']} ~ {metadata['period_end']}",
         f"- 재고 기준일: {metadata['inventory_date']}",
         f"- 빈 재고수량 정책: {metadata['missing_stock_quantity_policy']}",
+        f"- 적용 분석 조정: {len(metadata.get('applied_inventory_adjustments', []))}건",
         f"- 입력 거래일: {metadata['input_data_first_transaction_date']} ~ {metadata['input_data_last_transaction_date']}",
         f"- 원가 방식: {metadata['costing_method']} (재고 시트 단가 미사용)",
         "",
@@ -120,6 +134,7 @@ def render_markdown(analysis: dict[str, Any]) -> str:
 def main() -> int:
     args = parse_args()
     purchase, sales, inventory = load_payloads(args.base_dir)
+    analysis_spec = load_analysis_spec(args.analysis_spec)
     try:
         analysis = build_reconciliation(
             purchase,
@@ -129,6 +144,7 @@ def main() -> int:
             args.period_end,
             args.inventory_date,
             args.missing_stock_quantity_policy,
+            analysis_spec["inventory_adjustments"],
         )
     except ValueError as exc:
         raise SystemExit(f"analyze_inventory: error: {exc}") from exc
@@ -136,9 +152,23 @@ def main() -> int:
     args.md_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(analysis, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     args.md_out.write_text(render_markdown(analysis), encoding="utf-8")
+    adjustments_out = args.adjustments_out or args.base_dir / "analysis_adjustments.json"
+    adjustments_out.parent.mkdir(parents=True, exist_ok=True)
+    adjustments_out.write_text(
+        json.dumps(
+            {
+                "analysis_spec": analysis_spec,
+                "applied_inventory_adjustments": analysis["metadata"]["applied_inventory_adjustments"],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n",
+        encoding="utf-8",
+    )
     print(json.dumps(analysis["summary"], ensure_ascii=False, indent=2))
     print(f"wrote {args.json_out}")
     print(f"wrote {args.md_out}")
+    print(f"wrote {adjustments_out}")
     return 0
 
 

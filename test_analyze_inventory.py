@@ -39,6 +39,7 @@ def analyze(
     end="2026-12-31",
     stock_date="2026-12-31",
     missing_stock_quantity_policy="assume_zero",
+    inventory_adjustments=None,
 ):
     return build_reconciliation(
         {"records": purchases},
@@ -48,6 +49,7 @@ def analyze(
         end,
         stock_date,
         missing_stock_quantity_policy,
+        inventory_adjustments,
     )
 
 
@@ -562,6 +564,41 @@ class InventoryAnalysisTests(unittest.TestCase):
             (1, 0, "valid"),
         )
         self.assertEqual(result["metadata"]["missing_stock_quantity_policy"], "assume_zero")
+
+    def test_non_inventory_consumable_adjustment_adds_zero_cost_opening_purchase(self):
+        result = analyze(
+            [],
+            [sale("2026-01-02", 5, amount=500)],
+            [inventory(-5)],
+            start="2026-01-01",
+            end="2026-01-31",
+            stock_date="2026-01-31",
+            inventory_adjustments=[
+                {
+                    "id": "non-inventory-item-1",
+                    "product_id": 1,
+                    "treatment": "non_inventory_consumable",
+                    "description": "quantity-unmanaged consumable",
+                }
+            ],
+        )
+        adjustment = result["metadata"]["applied_inventory_adjustments"][0]
+        row = result["rows"][0]
+
+        self.assertEqual(adjustment["raw_ending_quantity"], -5)
+        self.assertEqual(adjustment["virtual_purchase"]["date"], "2026-01-01")
+        self.assertEqual(adjustment["virtual_purchase"]["quantity"], 5)
+        self.assertEqual(adjustment["virtual_purchase"]["unit_price"], 0)
+        self.assertEqual(
+            (row["ending_signed_stock_quantity"], row["inventory_sheet_quantity"], row["quantity_reconciliation_status"]),
+            (0, 0, "match"),
+        )
+        self.assertEqual(row["inventory_validation_status"], "non_inventory_consumable_ending_zero")
+        self.assertEqual(
+            (result["summary"]["gross_profit_status"], result["summary"]["unconfirmed_quantity"]),
+            ("confirmed", 0),
+        )
+        self.assertEqual(result["summary"]["virtual_zero_cost_purchase_quantity"], 5)
 
     def test_inventory_snapshot_invalid_quantities_are_preserved_with_validation_error_policy(self):
         for raw, expected_status in ((None, "missing_stock_quantity"), ("", "missing_stock_quantity"), ("invalid", "invalid_stock_quantity")):
