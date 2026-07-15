@@ -36,7 +36,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
             "매출 공급가액",
             "매출원가",
             "매출총이익",
-            "매출총이익률",
+            "원가대비 이익률",
             "기간 손익 흐름",
             "주간 재고금액 흐름",
             "원청별 매출과 원가",
@@ -45,7 +45,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
             "9,460원",
             "4,960원",
             "4,500원",
-            "47.6%",
+            "90.7%",
             "1,510원",
             "Demo Buyer A",
         ):
@@ -63,6 +63,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
             "재고 기준일 수량 대사",
             "component_mismatch",
             "validation_error",
+            "매출총이익률",
         ):
             self.assertNotIn(text, html)
         self.assertNotIn("평균원가", html)
@@ -76,7 +77,7 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
             "매출 공급가액",
             "매출원가",
             "매출총이익",
-            "매출총이익률",
+            "원가대비 이익률",
             "기초 재고금액",
             "기말 재고금액",
         )
@@ -105,14 +106,15 @@ class GenerateAnalysisReportHtmlTests(unittest.TestCase):
         self.assertEqual(sum(row["cost_amount"] for row in rows), fifo_total)
         self.assertGreater(fifo_total, 0)
 
-    def test_report_derives_margin_rate_from_displayed_amounts(self):
+    def test_report_derives_cost_profit_rate_from_displayed_amounts(self):
         sources = load_sources(EXAMPLE_DIR)
         summary = sources["reconciliation"]["summary"]
         self.assertEqual(summary["gross_profit_status"], "error")
 
         html = render_report_html(sources)
+        overview = html.split('<article class="report-page report-page--profit">', 1)[0]
 
-        self.assertIn("47.6%", html)
+        self.assertIn("90.7%", overview)
         self.assertNotIn("gross_profit_status", html)
         self.assertNotIn(">error<", html)
 

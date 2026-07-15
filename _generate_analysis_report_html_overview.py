@@ -97,6 +97,133 @@ def _money(value: Decimal) -> str:
     return _impl._base.money(_impl._base.rounded_amount(value))
 
 
+def _cost_based_profit_rate(gross_profit: Any, sales_cost: Any) -> float | None:
+    profit = _impl._base.decimal_amount(gross_profit)
+    cost = _impl._base.decimal_amount(sales_cost)
+    if profit is None or cost is None or cost <= 0:
+        return None
+    return float(profit / cost * Decimal("100"))
+
+
+def _replace_cost_profit_metric(html: str, summary: dict[str, Any]) -> str:
+    old_label = '<span class="metric-label">매출총이익률</span>'
+    label_position = html.find(old_label)
+    if label_position < 0:
+        raise RuntimeError("gross profit rate metric card not found")
+    card_start = html.rfind('<div class="metric-card">', 0, label_position)
+    card_end = html.find("</div>", label_position)
+    if card_start < 0 or card_end < 0:
+        raise RuntimeError("gross profit rate metric card boundary not found")
+    card_end += len("</div>")
+
+    gross_profit = _impl._summary_value(summary, "gross_profit", default=0)
+    sales_cost = _impl._summary_value(summary, "fifo_sales_cost_amount")
+    value = _impl._format_percent(_cost_based_profit_rate(gross_profit, sales_cost))
+
+    card = html[card_start:card_end].replace(
+        old_label,
+        '<span class="metric-label">원가대비 이익률</span>',
+        1,
+    )
+    strong_start = card.find("<strong>")
+    strong_end = card.find("</strong>", strong_start)
+    if strong_start < 0 or strong_end < 0:
+        raise RuntimeError("profit rate metric value not found")
+    strong_start += len("<strong>")
+    card = card[:strong_start] + escape(value) + card[strong_end:]
+    card = card.replace(
+        '<span class="metric-note">표시 금액 기준</span>',
+        '<span class="metric-note">매출총이익 ÷ 매출원가</span>',
+        1,
+    )
+    return html[:card_start] + card + html[card_end:]
+
+
+def _render_weekly_cost_profit_rows(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return _impl._empty_row(7)
+    body: list[str] = []
+    total_sales = Decimal("0")
+    total_cost = Decimal("0")
+    total_quantity = Decimal("0")
+    total_count = 0
+    for row in rows:
+        sales = _impl._base.decimal_amount(row.get("sales_amount_exact"))
+        if sales is None:
+            sales = _impl._base.decimal_amount(row.get("sales_amount")) or Decimal("0")
+        cost = _impl._base.decimal_amount(row.get("cost_amount_exact"))
+        if cost is None:
+            cost = _impl._base.decimal_amount(row.get("cost_amount")) or Decimal("0")
+        margin = sales - cost
+        rate = _cost_based_profit_rate(margin, cost)
+        quantity = _impl._base.decimal_amount(row.get("quantity")) or Decimal("0")
+        count = int(row.get("row_count") or 0)
+        total_sales += sales
+        total_cost += cost
+        total_quantity += quantity
+        total_count += count
+        body.append(
+            f"""
+            <tr>
+              <th>{escape(str(row.get('week_start') or row.get('label') or '-'))}</th>
+              <td class="num">{_impl._base.number(count)}</td>
+              <td class="num">{_impl._base.number(quantity)}</td>
+              <td class="money">{_impl._base.money(_impl._display_money(sales))}</td>
+              <td class="money">{_impl._base.money(_impl._display_money(cost))}</td>
+              <td class="money">{_impl._base.money(_impl._display_money(margin))}</td>
+              <td class="num">{escape(_impl._format_percent(rate))}</td>
+            </tr>
+            """
+        )
+    total_margin = total_sales - total_cost
+    body.append(
+        f"""
+        <tr class="total-row">
+          <th>합계</th>
+          <td class="num">{_impl._base.number(total_count)}</td>
+          <td class="num">{_impl._base.number(total_quantity)}</td>
+          <td class="money">{_impl._base.money(_impl._display_money(total_sales))}</td>
+          <td class="money">{_impl._base.money(_impl._display_money(total_cost))}</td>
+          <td class="money">{_impl._base.money(_impl._display_money(total_margin))}</td>
+          <td class="num">{escape(_impl._format_percent(_cost_based_profit_rate(total_margin, total_cost)))}</td>
+        </tr>
+        """
+    )
+    return "\n".join(body)
+
+
+def _replace_weekly_profit_table(html: str, rows: list[dict[str, Any]]) -> str:
+    title_position = html.find('id="weekly-title"')
+    if title_position < 0:
+        raise RuntimeError("weekly profit page title not found")
+    table_start = html.find("<table>", title_position)
+    table_end = html.find("</table>", table_start)
+    if table_start < 0 or table_end < 0:
+        raise RuntimeError("weekly profit table not found")
+
+    header = '<th class="num">이익률</th>'
+    header_position = html.find(header, table_start, table_end)
+    if header_position < 0:
+        raise RuntimeError("weekly profit rate header not found")
+    html = (
+        html[:header_position]
+        + '<th class="num">원가대비 이익률</th>'
+        + html[header_position + len(header):]
+    )
+
+    table_end = html.find("</table>", table_start)
+    body_open = html.find("<tbody>", table_start, table_end)
+    body_close = html.find("</tbody>", body_open, table_end)
+    if body_open < 0 or body_close < 0:
+        raise RuntimeError("weekly profit table body not found")
+    body_start = body_open + len("<tbody>")
+    return (
+        html[:body_start]
+        + _render_weekly_cost_profit_rows(rows)
+        + html[body_close:]
+    )
+
+
 def _movement_label(value: Decimal, result: bool = False, plain: bool = False) -> str:
     if result:
         return f"={_money(value)}"
@@ -252,6 +379,14 @@ def render_profit_flow_bridge(summary: dict[str, Any]) -> str:
 def render_report_html(sources: dict[str, Any], spec: dict[str, Any] | None = None) -> str:
     html = _impl.render_report_html(sources, spec)
     summary = sources["reconciliation"]["summary"]
+    weekly_profit = _impl._base.weekly_purchase_sales_amounts(
+        sources["purchase"].get("records", []),
+        sources["sales"].get("records", []),
+        sources["inventory"].get("records", []),
+        sources["reconciliation"],
+    )
+    html = _replace_cost_profit_metric(html, summary)
+    html = _replace_weekly_profit_table(html, weekly_profit)
     bridge = render_profit_flow_bridge(summary)
     html = html.replace("  </style>", f"{BRIDGE_STYLE}\n  </style>", 1)
     marker = '      <section class="overview-grid">'
