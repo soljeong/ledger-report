@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from analyze_inventory import build_reconciliation
+from analyze_inventory import build_reconciliation, resolve_analysis_spec_path
+from src.analysis_spec import load_analysis_spec
 
 
 def purchase(date: str, quantity: int, unit_price: int, *, product_id=1, voucher=1, excel_row=1, name="Item", spec="A") -> dict:
@@ -54,6 +57,28 @@ def analyze(
 
 
 class InventoryAnalysisTests(unittest.TestCase):
+    def test_uses_private_analysis_spec_by_default_when_present(self):
+        with TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            spec_path = base_dir / "analysis_spec.yaml"
+            spec_path.write_text(
+                """\
+version: 1
+inventory_adjustments:
+  - id: quantity-unmanaged-item
+    product_id: 999
+    treatment: non_inventory_consumable
+    description: Compare purchase and sales amounts without quantity management.
+""",
+                encoding="utf-8",
+            )
+
+            resolved = resolve_analysis_spec_path(None, base_dir)
+            spec = load_analysis_spec(resolved)
+
+            self.assertEqual(resolved, spec_path)
+            self.assertEqual(spec["inventory_adjustments"][0]["product_id"], 999)
+
     def test_fifo_consumes_multiple_purchase_layers(self):
         result = analyze(
             [purchase("2026-01-01", 5, 100), purchase("2026-01-02", 5, 200, voucher=2, excel_row=2)],

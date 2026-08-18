@@ -71,7 +71,7 @@ def auto_size(ws) -> None:
         width = 10
         for cell in column_cells:
             value = cell.value
-            if value is None:
+            if value in (None, ""):
                 continue
             longest_line = max(len(line) for line in str(value).splitlines())
             width = max(width, min(longest_line + 2, 60))

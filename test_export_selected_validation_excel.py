@@ -11,6 +11,36 @@ from export_selected_validation_excel import export_workbook
 
 
 class ExportSelectedValidationExcelTests(unittest.TestCase):
+    def test_exports_rows_with_empty_text_cells(self) -> None:
+        validation = {
+            "summary": {
+                "same_item_different_specs_count": 0,
+                "sales_without_purchase_item_count": 1,
+                "sales_without_purchase_item_spec_count": 0,
+            },
+            "same_item_different_specs": [],
+            "sales_without_purchase_item": [
+                {
+                    "item_key": "sales only",
+                    "item_names": ["Sales Only"],
+                    "sales_rows": 1,
+                    "sales_total_amount": 1000,
+                    "specifications": [""],
+                    "rows": [],
+                }
+            ],
+            "sales_without_purchase_item_spec": [],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "selected.xlsx"
+            export_workbook(validation, output_path)
+
+            workbook = load_workbook(output_path, data_only=True)
+            worksheet = workbook["매출품명_매입없음"]
+            self.assertIsNone(worksheet["E2"].value)
+            self.assertEqual(worksheet.column_dimensions["E"].width, 10)
+
     def test_exports_only_selected_validation_sections(self) -> None:
         sample_row = {
             "type": "sales",

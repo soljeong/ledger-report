@@ -48,6 +48,13 @@ def load_payloads(base_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dict[
     return purchase, sales, inventory
 
 
+def resolve_analysis_spec_path(explicit_path: Path | None, base_dir: Path) -> Path | None:
+    if explicit_path is not None:
+        return explicit_path
+    default_path = base_dir / "analysis_spec.yaml"
+    return default_path if default_path.exists() else None
+
+
 def build_reconciliation(
     purchase_payload: dict[str, Any],
     sales_payload: dict[str, Any],
@@ -134,7 +141,8 @@ def render_markdown(analysis: dict[str, Any]) -> str:
 def main() -> int:
     args = parse_args()
     purchase, sales, inventory = load_payloads(args.base_dir)
-    analysis_spec = load_analysis_spec(args.analysis_spec)
+    analysis_spec_path = resolve_analysis_spec_path(args.analysis_spec, args.base_dir)
+    analysis_spec = load_analysis_spec(analysis_spec_path)
     try:
         analysis = build_reconciliation(
             purchase,
